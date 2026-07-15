@@ -686,7 +686,7 @@ export default function Home() {
           aria-expanded={drawer === "markings"}
           onClick={() => setDrawer(drawer === "markings" ? null : "markings")}
         >
-          Study{markings.length + notes.length ? ` ${markings.length + notes.length}` : ""}
+          Study
         </button>
         <button className="theme-button" type="button" onClick={changeTheme}>
           {dark ? "Light" : "Dark"}
@@ -1099,7 +1099,10 @@ export default function Home() {
                         );
                       })}
                     </span>
-                    <button className={verseNote ? "note-button has-note" : "note-button"} type="button" aria-label={`${verseNote ? "Edit" : "Add"} note for ${reference}`} onClick={() => openNote(verse.verse, reference)}>{verseNote ? "Note" : "+ Note"}</button>
+                    {verseNote ? <button className="inline-note" type="button" onClick={() => openNote(verse.verse, reference)} aria-label={`Edit note for ${reference}`}>
+                      <span>Note</span>
+                      <p>{verseNote.text}</p>
+                    </button> : null}
                   </li>
                 );
               })}
@@ -1132,6 +1135,11 @@ export default function Home() {
                 }
               />
             ))}
+            {wholeVerseSelection ? <button className="add-note-from-palette" type="button" onClick={() => {
+              const selection = wholeVerseSelection;
+              setWholeVerseSelection(null);
+              openNote(selection.verse, selection.reference);
+            }}>{notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "Edit note" : "Add note"}</button> : null}
             <button
               className="cancel-selection"
               type="button"
