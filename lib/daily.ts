@@ -1,4 +1,5 @@
 export const DAILY_SCRIPTURE_URL = "https://raw.githubusercontent.com/trueChristian/daily-scripture/refs/heads/master/README.json";
+export const DEFAULT_TRANSLATION = "kjv";
 
 export interface DailyReference {
   date: string;

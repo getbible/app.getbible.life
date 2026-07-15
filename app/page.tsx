@@ -39,9 +39,10 @@ import {
   markingMatchesPassage,
   translucentColor,
   wholeVerseMarking,
+  withoutWholeVerseMarking,
 } from "../lib/markings";
-import { DAILY_SCRIPTURE_URL, dailyIsCurrent, parseDailyReference } from "../lib/daily";
-import { type VerseNote, compareNotes, mergeNotes, noteKey } from "../lib/notes";
+import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyReference } from "../lib/daily";
+import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryTurn, readerStorageKeys } from "../lib/reader-state";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
@@ -184,7 +185,7 @@ export default function Home() {
         Math.min(28, Math.max(16, Number(localStorage.getItem(TEXT_SIZE)) || 20)),
       );
       setMarkings(storedValue<Marking[]>(MARKINGS, []));
-      setNotes(storedValue<VerseNote[]>(NOTES, []));
+      setNotes(mergeNotes([], storedValue<VerseNote[]>(NOTES, [])));
       const savedFont = localStorage.getItem(READER_FONT) ?? "serif";
       const savedPalette = localStorage.getItem(LIGHT_PALETTE) ?? "white";
       setReaderFont(READER_FONTS.some((font) => font.id === savedFont) ? savedFont : "serif");
@@ -247,12 +248,12 @@ export default function Home() {
         parsed = parseDailyReference(daily);
         localStorage.setItem(DAILY_CACHE, JSON.stringify(daily));
       }
-      const allBooks = valuesByNumber((await loadBooks(parsed.translation)).data);
+      const allBooks = valuesByNumber((await loadBooks(DEFAULT_TRANSLATION)).data);
       const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
       const book = allBooks.find((item) => normalize(item.name) === normalize(parsed.bookName));
       if (!book) throw new Error(`The daily Scripture book “${parsed.bookName}” is unavailable.`);
       setPendingVerse(parsed.verse);
-      go({ translation: parsed.translation, book: book.nr, chapter: parsed.chapter });
+      go({ translation: DEFAULT_TRANSLATION, book: book.nr, chapter: parsed.chapter });
       setDrawer(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Today’s Scripture could not be opened.");
@@ -618,7 +619,7 @@ export default function Home() {
   const openSavedNote = (note: VerseNote) => {
     setDrawer(null);
     setPendingVerse(note.verse);
-    if (noteKey(note).split("/").slice(0, 3).join("/") !== `${route.translation}/${route.book}/${route.chapter}`) go(note.passage);
+    if (!noteMatchesPassage(note, route)) go({ ...note.passage, translation: route.translation });
   };
 
   const clearAllLocalData = async () => {
@@ -643,7 +644,10 @@ export default function Home() {
   const openMarking = (marking: Marking) => {
     setDrawer(null);
     setPendingVerse(marking.verse);
-    if (!markingMatchesPassage(marking, route)) go(marking.passage);
+    if (!markingMatchesPassage(marking, route)) {
+      const translation = marking.start === null && marking.end === null ? route.translation : marking.passage.translation;
+      go({ ...marking.passage, translation });
+    }
   };
 
   return (
@@ -974,7 +978,7 @@ export default function Home() {
                   <button type="button" className="edit-note" aria-label={`Edit note for ${note.reference}`} onClick={() => {
                     setDrawer(null);
                     setPendingVerse(note.verse);
-                    if (noteKey(note).split("/").slice(0, 3).join("/") !== `${route.translation}/${route.book}/${route.chapter}`) go(note.passage);
+                    if (!noteMatchesPassage(note, route)) go({ ...note.passage, translation: route.translation });
                     window.setTimeout(() => setNoteEditor({ verse: note.verse, reference: note.reference, text: note.text }), 100);
                   }}>Edit</button>
                   <button type="button" className="delete-marking" aria-label={`Delete note for ${note.reference}`} onClick={() => {
@@ -1135,6 +1139,10 @@ export default function Home() {
                 }
               />
             ))}
+            {wholeVerseSelection ? <button className="selection-none" type="button" aria-label={`Remove whole-verse color from ${wholeVerseSelection.reference}`} title="No whole-verse color" onClick={() => {
+              setMarkings((current) => withoutWholeVerseMarking(current, route, wholeVerseSelection.verse));
+              setWholeVerseSelection(null);
+            }}><i />None</button> : null}
             {wholeVerseSelection ? <button className="add-note-from-palette" type="button" onClick={() => {
               const selection = wholeVerseSelection;
               setWholeVerseSelection(null);

@@ -48,7 +48,10 @@ export interface MarkingsBackup {
 }
 
 export function markingIdentity(marking: Marking): string {
-  return [passageKey(marking.passage), marking.verse, marking.start ?? "all", marking.end ?? "all", marking.quote, marking.colorId].join("|");
+  if (marking.start === null && marking.end === null) {
+    return [canonicalPassageKey(marking.passage), marking.verse, "all", marking.colorId].join("|");
+  }
+  return [passageKey(marking.passage), marking.verse, marking.start, marking.end, marking.quote, marking.colorId].join("|");
 }
 
 export function mergeMarkings(current: Marking[], imported: Marking[]): Marking[] {
@@ -98,11 +101,17 @@ export function passageKey(passage: Passage): string {
   return `${passage.translation}/${passage.book}/${passage.chapter}`;
 }
 
+export function canonicalPassageKey(passage: Passage): string {
+  return `${passage.book}/${passage.chapter}`;
+}
+
 export function markingMatchesPassage(
   marking: Marking,
   passage: Passage,
 ): boolean {
-  return passageKey(marking.passage) === passageKey(passage);
+  return marking.start === null && marking.end === null
+    ? canonicalPassageKey(marking.passage) === canonicalPassageKey(passage)
+    : passageKey(marking.passage) === passageKey(passage);
 }
 
 export function wholeVerseMarking(markings: Marking[]): Marking | null {
@@ -110,6 +119,22 @@ export function wholeVerseMarking(markings: Marking[]): Marking | null {
     [...markings]
       .reverse()
       .find((marking) => marking.start === null && marking.end === null) ?? null
+  );
+}
+
+export function withoutWholeVerseMarking(
+  markings: Marking[],
+  passage: Passage,
+  verse: number,
+): Marking[] {
+  return markings.filter(
+    (marking) =>
+      !(
+        marking.verse === verse &&
+        marking.start === null &&
+        marking.end === null &&
+        canonicalPassageKey(marking.passage) === canonicalPassageKey(passage)
+      ),
   );
 }
 

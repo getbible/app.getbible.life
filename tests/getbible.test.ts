@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { WEEK_MS, fresh, parsePassage, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
-import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking } from "../lib/markings.ts";
-import { dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
-import { compareNotes, mergeNotes, noteKey } from "../lib/notes.ts";
+import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
+import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
+import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
 import { boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
 
 test("parses and sanitizes passage URLs",()=>{
@@ -46,7 +46,21 @@ test("identifies passages and whole-verse markings", () => {
 
   assert.equal(passageKey(passage), "kjv/43/3");
   assert.equal(markingMatchesPassage(marking, passage), true);
+  assert.equal(markingMatchesPassage(marking, { ...passage, translation: "aov" }), true);
   assert.equal(wholeVerseMarking([marking])?.id, "one");
+});
+
+test("keeps selected-text markings translation-specific", () => {
+  const marking = { id: "word", passage: { translation: "kjv", book: 43, chapter: 3 }, verse: 16, start: 0, end: 3, quote: "For", colorId: "yellow", createdAt: 1 };
+  assert.equal(markingMatchesPassage(marking, marking.passage), true);
+  assert.equal(markingMatchesPassage(marking, { ...marking.passage, translation: "aov" }), false);
+});
+
+test("removes a whole-verse color across translations without removing word highlights", () => {
+  const passage = { translation: "kjv", book: 43, chapter: 3 };
+  const whole = { id: "whole", passage: { ...passage, translation: "aov" }, verse: 16, start: null, end: null, quote: "Verse", colorId: "yellow", createdAt: 1 };
+  const word = { ...whole, id: "word", passage, start: 0, end: 4, quote: "Word" };
+  assert.deepEqual(withoutWholeVerseMarking([whole, word], passage, 16).map((marking) => marking.id), ["word"]);
 });
 
 test("splits overlapping text markings deterministically", () => {
@@ -90,6 +104,9 @@ test("merges imported colors and markings without duplicates", () => {
     { id: "yellow", name: "Duplicate", value: "#ffffff" },
     { id: "blue", name: "Study", value: "#bfdbfe" },
   ]).map((color) => color.id), ["yellow", "blue"]);
+
+  const translatedDuplicate = { ...existing, id: "translated", passage: { ...passage, translation: "aov" }, quote: "Want so lief" };
+  assert.equal(mergeMarkings([existing], [translatedDuplicate]).length, 1);
 });
 
 test("validates portable markings backups", () => {
@@ -113,6 +130,7 @@ test("parses and date-checks daily Scripture responses", () => {
   assert.equal(dailyDateKey(daily.date), "2026-07-15");
   assert.equal(dailyIsCurrent(daily.date, new Date(2026, 6, 15, 12)), true);
   assert.equal(dailyIsCurrent(daily.date, new Date(2026, 6, 16, 12)), false);
+  assert.equal(DEFAULT_TRANSLATION, "kjv");
 });
 
 test("merges verse notes by reference and keeps the newest edit", () => {
@@ -121,7 +139,9 @@ test("merges verse notes by reference and keeps the newest edit", () => {
   const fresh = { ...old, id: "two", text: "Fresh", updatedAt: 3 };
   const other = { ...old, id: "three", verse: 17, reference: "John 3:17" };
   const merged = mergeNotes([old], [fresh, other]).sort(compareNotes);
-  assert.equal(noteKey(old), "kjv/43/3/16");
+  assert.equal(noteKey(old), "43/3/16");
+  assert.equal(noteKey({ ...old, passage: { ...passage, translation: "aov" } }), "43/3/16");
+  assert.equal(noteMatchesPassage(old, { ...passage, translation: "aov" }), true);
   assert.deepEqual(merged.map((note) => note.text), ["Fresh", "Old"]);
 });
 

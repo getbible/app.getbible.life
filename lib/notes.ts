@@ -11,7 +11,11 @@ export interface VerseNote {
 }
 
 export function noteKey(note: Pick<VerseNote, "passage" | "verse">): string {
-  return `${note.passage.translation}/${note.passage.book}/${note.passage.chapter}/${note.verse}`;
+  return `${note.passage.book}/${note.passage.chapter}/${note.verse}`;
+}
+
+export function noteMatchesPassage(note: VerseNote, passage: Passage): boolean {
+  return note.passage.book === passage.book && note.passage.chapter === passage.chapter;
 }
 
 export function compareNotes(left: VerseNote, right: VerseNote): number {

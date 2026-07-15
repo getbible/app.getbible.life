@@ -14,8 +14,9 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Custom marking colors and category names, plus a searchable reading history in the Markings drawer.
 - Portable JSON backup and merge-import for markings, with duplicate prevention and safe bulk deletion.
 - Long-term verse notes with Bible-order navigation; backups include notes, markings, and custom color groups.
+- Verse notes and whole-verse markings follow the canonical book/chapter/verse across translations; selected word and phrase markings remain translation-specific.
 - The visible reading position is remembered down to the verse and restored on the next visit.
-- First-time readers open at the daily Scripture; clicking `getBible.Life` returns to that day’s cached verse.
+- First-time readers open the daily Scripture in King James Version; clicking `getBible.Life` returns to that day’s cached verse in KJV.
 - Page-width and full-screen-width reading modes, selectable fonts, and light reading palettes.
 - Browser Cache Storage for fast repeat visits and offline fallback.
 - Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.
