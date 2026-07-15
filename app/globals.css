@@ -228,6 +228,13 @@ summary:focus-visible {
 .search-results li button:hover { background: var(--subtle); }
 .search-results li strong { font-size: 11px; }
 .search-results li span { font-family: Georgia, "Times New Roman", serif; font-size: 13px; line-height: 1.45; }
+.search-results mark {
+  padding: 0 0.08em;
+  border-radius: 2px;
+  background: color-mix(in srgb, var(--foreground) 18%, var(--background));
+  color: var(--foreground);
+  font-weight: 760;
+}
 .search-initializing {
   display: flex;
   min-height: 210px;

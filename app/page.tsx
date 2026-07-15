@@ -46,10 +46,11 @@ import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyRef
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance";
-import { flattenTranslation, searchVerses, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
+import { flattenTranslation, highlightSearchText, searchVerses, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
+const THEME_MODE = "getbible-reader:theme-mode:v1";
 const TEXT_SIZE = "getbible-reader:size:v1";
 const MARKINGS = "getbible-reader:markings:v1";
 const MARKING_COLORS = "getbible-reader:marking-colors:v1";
@@ -129,6 +130,7 @@ export default function Home() {
   const [error, setError] = useState("");
   const [verified, setVerified] = useState(true);
   const [dark, setDark] = useState(false);
+  const [themeMode, setThemeMode] = useState<"system" | "manual">("system");
   const [textSize, setTextSize] = useState(20);
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [markingsReady, setMarkingsReady] = useState(false);
@@ -193,6 +195,7 @@ export default function Home() {
 
       setRoute(next);
       setDark(document.documentElement.dataset.theme === "dark");
+      setThemeMode((localStorage.getItem(THEME_MODE) ?? (localStorage.getItem(THEME) ? "manual" : "system")) === "manual" ? "manual" : "system");
       setTextSize(
         Math.min(28, Math.max(16, Number(localStorage.getItem(TEXT_SIZE)) || 20)),
       );
@@ -225,6 +228,24 @@ export default function Home() {
       window.removeEventListener("popstate", popState);
     };
   }, []);
+
+  useEffect(() => {
+    if (themeMode !== "system") return;
+    const query = window.matchMedia("(prefers-color-scheme: dark)");
+    const update = (event: MediaQueryListEvent) => {
+      setDark(event.matches);
+      document.documentElement.dataset.theme = event.matches ? "dark" : "light";
+    };
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, [themeMode]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = previous; };
+  }, [searchOpen]);
 
   useEffect(() => {
     if (!markingsReady) return;
@@ -440,7 +461,7 @@ export default function Home() {
     boundaryAttempt.current = null;
     wheelGestureActive.current = false;
     window.clearTimeout(wheelGestureTimer.current);
-    if (drawer || loading || !passage) return;
+    if (drawer || searchOpen || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
@@ -467,7 +488,7 @@ export default function Home() {
       window.clearTimeout(wheelGestureTimer.current);
       window.removeEventListener("wheel", wheel);
     };
-  }, [drawer, loading, passage, route, turn]);
+  }, [drawer, loading, passage, route, searchOpen, turn]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -524,6 +545,16 @@ export default function Home() {
     setDark(nextDark);
     document.documentElement.dataset.theme = nextDark ? "dark" : "light";
     localStorage.setItem(THEME, nextDark ? "dark" : "light");
+  };
+
+  const changeThemeMode = (mode: "system" | "manual") => {
+    setThemeMode(mode);
+    localStorage.setItem(THEME_MODE, mode);
+    const nextDark = mode === "system"
+      ? window.matchMedia("(prefers-color-scheme: dark)").matches
+      : localStorage.getItem(THEME) === "dark";
+    setDark(nextDark);
+    document.documentElement.dataset.theme = nextDark ? "dark" : "light";
   };
 
   const changeTextSize = (value: number) => {
@@ -776,9 +807,9 @@ export default function Home() {
         >
           Study
         </button>
-        <button className="theme-button" type="button" onClick={changeTheme}>
+        {themeMode === "manual" ? <button className="theme-button" type="button" onClick={changeTheme}>
           {dark ? "Light" : "Dark"}
-        </button>
+        </button> : null}
       </header>
 
       {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label="Search Bible">
@@ -808,7 +839,7 @@ export default function Home() {
               setPendingVerse(result.verse);
               go({ translation: route.translation, book: result.book, chapter: result.chapter });
               setSearchOpen(false);
-            }}><strong>{result.reference}</strong><span>{result.text}</span></button></li>)}</ol> : <p className="search-prompt">No verses match these filters.</p>}
+            }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : <p className="search-prompt">No verses match these filters.</p>}
           </>}
         </div>
       </section> : null}
@@ -899,6 +930,13 @@ export default function Home() {
             <details className="reader-options">
               <summary>Reader options</summary>
               <label className="field">
+                <span>Appearance control</span>
+                <select value={themeMode} onChange={(event) => changeThemeMode(event.target.value === "manual" ? "manual" : "system")}>
+                  <option value="system">Follow system</option>
+                  <option value="manual">Manual</option>
+                </select>
+              </label>
+              <label className="field">
                 <span>Text size</span>
                 <select
                   value={textSize}
@@ -931,7 +969,7 @@ export default function Home() {
                   <option value="full">Full screen width</option>
                 </select>
               </label>
-              {!dark ? <label className="field">
+              <label className="field">
                 <span>Light appearance</span>
                 <select value={lightPalette} onChange={(event) => {
                   setLightPalette(event.target.value);
@@ -940,7 +978,8 @@ export default function Home() {
                 }}>
                   {LIGHT_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{palette.name}</option>)}
                 </select>
-              </label> : <label className="field">
+              </label>
+              <label className="field">
                 <span>Dark appearance</span>
                 <select value={darkPalette} onChange={(event) => {
                   setDarkPalette(event.target.value);
@@ -949,7 +988,7 @@ export default function Home() {
                 }}>
                   {DARK_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{palette.name}</option>)}
                 </select>
-              </label>}
+              </label>
               <p className="cache-status">
                 {verified ? "Content hash verified" : "Showing saved content"}
               </p>

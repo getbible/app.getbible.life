@@ -6,7 +6,7 @@ import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference 
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
 import { boundaryIntent, boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance.ts";
-import { flattenTranslation, searchVerses } from "../lib/search.ts";
+import { flattenTranslation, highlightSearchText, searchVerses } from "../lib/search.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -181,6 +181,14 @@ test("searches a complete translation with word, phrase, case, and scope filters
   assert.deepEqual(searchVerses(corpus, "The man", { ...options, words: "phrase", scope: "nt" }).map((verse) => verse.reference), ["Matthew 1:1"]);
   assert.equal(searchVerses(corpus, "the man", { ...options, words: "phrase", caseSensitive: true }).length, 0);
   assert.deepEqual(searchVerses(corpus, "cat", { ...options, scope: "book:1" }).map((verse) => verse.reference), ["Genesis 1:2"]);
+});
+
+test("highlights every matching result word without losing punctuation", () => {
+  const partial = highlightSearchText("A cat, two cats; CAT.", "cat", { match: "partial", caseSensitive: false, locale: "en" });
+  assert.equal(partial.map((part) => part.text).join(""), "A cat, two cats; CAT.");
+  assert.deepEqual(partial.filter((part) => part.highlighted).map((part) => part.text), ["cat", "cats", "CAT"]);
+  const exact = highlightSearchText("woman and women", "woman", { match: "exact", caseSensitive: false, locale: "en" });
+  assert.deepEqual(exact.filter((part) => part.highlighted).map((part) => part.text), ["woman"]);
 });
 
 test("clears only getBible.Life reader storage keys", () => {
