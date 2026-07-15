@@ -44,6 +44,10 @@ export function passagePath(value:Passage, bookName:string):string {
   return `/${encodeURIComponent(value.translation.toUpperCase())}/${encodeURIComponent(bookSlug(bookName))}/${value.chapter}`;
 }
 
+export function getBibleLifeUrl(value:Passage, bookName:string):string {
+  return `https://getbible.life/${encodeURIComponent(value.translation.toUpperCase())}/${encodeURIComponent(bookName.trim())}/${value.chapter}`;
+}
+
 export function parsePassagePath(pathname:string):FriendlyPassage|null {
   const parts=pathname.split("/").filter(Boolean);
   if(parts.length!==3) return null;

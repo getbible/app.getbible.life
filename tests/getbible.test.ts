@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, parsePassage, parsePassagePath, passagePath, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
+import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
@@ -23,6 +23,7 @@ test("creates and parses friendly canonical passage paths", () => {
   assert.deepEqual(parsePassagePath("/KJV/Ephesians/5"), { translation: "kjv", bookSlug: "Ephesians", chapter: 5 });
   assert.equal(bookSlug("1 John"), "1-John");
   assert.equal(bookMatchesSlug("1 John", "1-john"), true);
+  assert.equal(getBibleLifeUrl({ translation: "aov", book: 62, chapter: 3 }, "1 Johannes"), "https://getbible.life/AOV/1%20Johannes/3");
   assert.equal(parsePassagePath("/not/a/passage/5"), null);
 });
 
@@ -35,8 +36,8 @@ test("exports a chapter as plain one-verse-per-line Markdown", () => {
       { chapter: 5, verse: 2, name: "Ephesians 5:2", text: "And walk in love." },
     ],
   };
-  assert.equal(chapterMarkdown(chapter), "1 Be ye therefore followers of God.\n2 And walk in love.");
-  assert.equal(chapterMarkdown(chapter, "Public Domain"), "1 Be ye therefore followers of God.\n2 And walk in love.\n\n---\nPublic Domain");
+  assert.equal(chapterMarkdown(chapter), "# Ephesians 5\n\n1. Be ye therefore followers of God.\n2. And walk in love.");
+  assert.equal(chapterMarkdown(chapter, { translationName: "King James Version", copyrightNotice: "Public Domain" }), "# Ephesians 5\n\n1. Be ye therefore followers of God.\n2. And walk in love.\n\n---\n**King James Version**\n\nPublic Domain");
   assert.equal(chapterMarkdownFilename(chapter), "Ephesians-5.md");
 });
 

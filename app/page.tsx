@@ -17,6 +17,7 @@ import {
   type Translation,
   bookMatchesSlug,
   bookSlug,
+  getBibleLifeUrl,
   parsePassage,
   parsePassagePath,
   passagePath,
@@ -491,7 +492,7 @@ export default function Home() {
     boundaryAttempt.current = null;
     wheelGestureActive.current = false;
     window.clearTimeout(wheelGestureTimer.current);
-    if (drawer || searchOpen || loading || !passage) return;
+    if (drawer || searchOpen || markdownMode || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
@@ -518,7 +519,7 @@ export default function Home() {
       window.clearTimeout(wheelGestureTimer.current);
       window.removeEventListener("wheel", wheel);
     };
-  }, [drawer, loading, passage, route, searchOpen, turn]);
+  }, [drawer, loading, markdownMode, passage, route, searchOpen, turn]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -832,7 +833,7 @@ export default function Home() {
   const copyMarkdown = async () => {
     if (!passage) return;
     try {
-      await navigator.clipboard.writeText(chapterMarkdown(passage, translation?.distribution_license));
+      await navigator.clipboard.writeText(chapterMarkdown(passage, { translationName: translation?.translation, copyrightNotice: translation?.distribution_license }));
       setMarkdownMessage("Chapter copied.");
     } catch {
       setMarkdownMessage("Copy is unavailable in this browser. Select the text and copy it manually.");
@@ -841,7 +842,7 @@ export default function Home() {
 
   const downloadMarkdown = () => {
     if (!passage) return;
-    const url = URL.createObjectURL(new Blob([chapterMarkdown(passage, translation?.distribution_license)], { type: "text/markdown;charset=utf-8" }));
+    const url = URL.createObjectURL(new Blob([chapterMarkdown(passage, { translationName: translation?.translation, copyrightNotice: translation?.distribution_license })], { type: "text/markdown;charset=utf-8" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = chapterMarkdownFilename(passage);
@@ -1278,7 +1279,7 @@ export default function Home() {
               <div><strong>{passage.name}</strong><span>One verse per line</span></div>
               <div><button type="button" onClick={() => void copyMarkdown()}>Copy</button><button type="button" onClick={downloadMarkdown}>Download .md</button></div>
             </header>
-            <textarea readOnly spellCheck={false} value={chapterMarkdown(passage, translation?.distribution_license)} aria-label={`${passage.name} plain Markdown text`} />
+            <textarea readOnly spellCheck={false} value={chapterMarkdown(passage, { translationName: translation?.translation, copyrightNotice: translation?.distribution_license })} aria-label={`${passage.name} plain Markdown text`} />
             {markdownMessage ? <p role="status">{markdownMessage}</p> : null}
           </section>
         ) : (
@@ -1409,6 +1410,11 @@ export default function Home() {
           </article>
         )}
       </section>
+
+      {passage ? <footer className="site-footer">
+        <a href={getBibleLifeUrl(route, passage.book_name)}>getBible.Life <span>The words of eternal life</span></a>
+        <span>© 2014 - {new Date().getUTCFullYear()} Vast Development Method ™, All Rights Reserved</span>
+      </footer> : null}
 
       {textSelection || wholeVerseSelection ? (
         <div className="selection-toolbar" role="dialog" aria-label="Mark selected text">
