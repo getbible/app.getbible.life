@@ -448,6 +448,13 @@ summary:focus-visible {
   text-decoration: none;
 }
 .site-footer a:hover { color: var(--foreground); }
+.site-footer-life,
+.site-footer-life a { color: #38aee8; }
+.site-footer-life a:hover { color: #75cfff; }
+.site-footer-heart {
+  color: #dc2626;
+  font-size: 1.15em;
+}
 
 .theme-button {
   min-width: 48px;
