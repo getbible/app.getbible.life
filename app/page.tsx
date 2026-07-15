@@ -1411,8 +1411,8 @@ export default function Home() {
         )}
       </section>
 
-      {passage ? <footer className="site-footer">
-        <a href={getBibleLifeUrl(route, passage.book_name)}>getBible.Life <span>The words of eternal life</span></a>
+      {passage ? <footer className="site-footer" style={{ "--footer-text-size": `${textSize}px` } as CSSProperties}>
+        <span><a href={getBibleLifeUrl(route, passage.book_name)}>getBible.Life</a> <span>The words of eternal life</span></span>
         <span>© 2014 - {new Date().getUTCFullYear()} Vast Development Method ™, All Rights Reserved</span>
       </footer> : null}
 

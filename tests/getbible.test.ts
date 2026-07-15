@@ -37,7 +37,7 @@ test("exports a chapter as plain one-verse-per-line Markdown", () => {
     ],
   };
   assert.equal(chapterMarkdown(chapter), "# Ephesians 5\n\n1. Be ye therefore followers of God.\n2. And walk in love.");
-  assert.equal(chapterMarkdown(chapter, { translationName: "King James Version", copyrightNotice: "Public Domain" }), "# Ephesians 5\n\n1. Be ye therefore followers of God.\n2. And walk in love.\n\n---\n**King James Version**\n\nPublic Domain");
+  assert.equal(chapterMarkdown(chapter, { translationName: "King James Version", copyrightNotice: "Public Domain" }), "# Ephesians 5\n\n1. Be ye therefore followers of God.\n2. And walk in love.\n\n---\n**King James Version**\n\n> Public Domain");
   assert.equal(chapterMarkdownFilename(chapter), "Ephesians-5.md");
 });
 

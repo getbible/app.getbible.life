@@ -433,27 +433,21 @@ summary:focus-visible {
 .markdown-view > p { margin: 0; color: var(--muted); font-size: 10px; }
 
 .site-footer {
-  position: fixed;
-  z-index: 30;
-  right: 5px;
-  bottom: 5px;
-  left: 5px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 20px;
+  width: 100%;
+  padding: 10px;
   color: var(--muted);
-  font-size: 9px;
-  line-height: 1.2;
-  pointer-events: none;
+  font-size: var(--footer-text-size, 20px);
+  line-height: 1.35;
 }
 .site-footer a {
   color: inherit;
-  pointer-events: auto;
   text-decoration: none;
 }
 .site-footer a:hover { color: var(--foreground); }
-.site-footer a span { margin-inline-start: 4px; }
 
 .theme-button {
   min-width: 48px;
