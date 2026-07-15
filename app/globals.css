@@ -112,7 +112,7 @@ summary:focus-visible {
   z-index: 40;
   top: 0;
   display: grid;
-  grid-template-columns: 34px auto minmax(180px, 520px) minmax(40px, 1fr) auto auto auto;
+  grid-template-columns: 34px auto minmax(180px, 520px) minmax(40px, 1fr) auto auto auto auto;
   align-items: center;
   gap: 12px;
   height: 48px;
@@ -375,7 +375,8 @@ summary:focus-visible {
 }
 
 .markings-button,
-.theme-button {
+.theme-button,
+.markdown-button {
   height: 30px;
   padding: 0 10px;
   border: 1px solid var(--border);
@@ -386,6 +387,50 @@ summary:focus-visible {
   font-size: 10px;
   font-weight: 700;
 }
+
+.markdown-button {
+  display: grid;
+  width: 34px;
+  padding: 0;
+  place-items: center;
+}
+.markdown-button svg { width: 21px; fill: none; stroke: currentColor; stroke-width: 1.5; }
+.markdown-button[aria-pressed="true"] { background: var(--foreground); color: var(--background); }
+
+.markdown-view {
+  display: flex;
+  min-height: calc(100vh - 80px);
+  flex-direction: column;
+  gap: 10px;
+}
+.markdown-view > header { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.markdown-view > header > div { display: flex; align-items: center; gap: 8px; }
+.markdown-view header strong { font-size: 13px; }
+.markdown-view header span { color: var(--muted); font-size: 10px; }
+.markdown-view header button {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 700;
+}
+.markdown-view textarea {
+  width: 100%;
+  min-height: calc(100vh - 150px);
+  flex: 1;
+  resize: none;
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--subtle);
+  color: var(--foreground);
+  font: 14px/1.65 var(--font-geist-mono), monospace;
+}
+.markdown-view > p { margin: 0; color: var(--muted); font-size: 10px; }
 
 .theme-button {
   min-width: 48px;
@@ -1355,7 +1400,7 @@ summary:focus-visible {
 @media (max-width: 720px) {
   .drawer:has(.markings-panel) { width: calc(100vw - 36px); }
   .topbar {
-    grid-template-columns: 32px auto minmax(0, 1fr) auto auto;
+    grid-template-columns: 32px auto minmax(0, 1fr) auto auto auto;
     gap: 7px;
     padding: 0 9px;
   }
@@ -1506,13 +1551,14 @@ summary:focus-visible {
   }
 
   .topbar {
-    grid-template-columns: 32px auto minmax(0, 1fr) auto auto;
+    grid-template-columns: 32px auto minmax(0, 1fr) auto auto auto;
     gap: 5px;
     padding-inline: 5px;
   }
 
   .brand { font-size: 12px; }
   .header-search input { padding-inline: 7px; }
+  .markdown-view > header { align-items: flex-start; flex-direction: column; }
   .search-results li button { display: flex; flex-direction: column; gap: 4px; }
 
   .markings-button {

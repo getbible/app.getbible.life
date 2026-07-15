@@ -15,7 +15,11 @@ import {
   type ChapterInfo,
   type Passage,
   type Translation,
+  bookMatchesSlug,
+  bookSlug,
   parsePassage,
+  parsePassagePath,
+  passagePath,
   passageSearch,
   translationValues,
   valuesByNumber,
@@ -47,6 +51,7 @@ import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage }
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance";
 import { flattenTranslation, highlightSearchText, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
+import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -120,6 +125,7 @@ function selectionWithin(element: HTMLElement): { start: number; end: number; te
 
 export default function Home() {
   const [route, setRoute] = useState<Passage>(INITIAL_PASSAGE);
+  const [pathBookSlug, setPathBookSlug] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
   const [loading, setLoading] = useState(true);
   const [translations, setTranslations] = useState<Translation[]>([]);
@@ -152,6 +158,8 @@ export default function Home() {
   const [noteEditor, setNoteEditor] = useState<{ verse: number; reference: string; text: string } | null>(null);
   const [needsDaily, setNeedsDaily] = useState(false);
   const [pendingVerse, setPendingVerse] = useState<number | null>(null);
+  const [markdownMode, setMarkdownMode] = useState(false);
+  const [markdownMessage, setMarkdownMessage] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
   const [searchWords, setSearchWords] = useState<WordMode>("all");
@@ -167,6 +175,7 @@ export default function Home() {
   const [searchComplete, setSearchComplete] = useState(true);
   const [searchRunning, setSearchRunning] = useState(false);
   const requestId = useRef(0);
+  const booksRef = useRef<Book[]>([]);
   const searchRequestId = useRef(0);
   const searchScanId = useRef(0);
   const touchStart = useRef<{ x: number; y: number; boundary: -1 | 0 | 1 } | null>(null);
@@ -178,8 +187,10 @@ export default function Home() {
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
-      let next = parsePassage(window.location.search);
-      if (!window.location.search) {
+      const friendly = parsePassagePath(window.location.pathname);
+      let next = friendly ? { translation: friendly.translation, book: INITIAL_PASSAGE.book, chapter: friendly.chapter } : parsePassage(window.location.search);
+      setPathBookSlug(friendly?.bookSlug ?? null);
+      if (!friendly && !window.location.search) {
         const savedReading = storedValue<{ passage: Passage; verse: number } | null>(LAST_READING, null);
         if (savedReading) {
           next = savedReading.passage;
@@ -226,7 +237,12 @@ export default function Home() {
       void navigator.storage?.persist?.();
     }, 0);
 
-    const popState = () => setRoute(parsePassage(window.location.search));
+    const popState = () => {
+      const friendly = parsePassagePath(window.location.pathname);
+      setPathBookSlug(friendly?.bookSlug ?? null);
+      setRoute(friendly ? { translation: friendly.translation, book: INITIAL_PASSAGE.book, chapter: friendly.chapter } : parsePassage(window.location.search));
+      setMarkdownMode(false);
+    };
     window.addEventListener("popstate", popState);
     return () => {
       window.clearTimeout(timer);
@@ -268,13 +284,18 @@ export default function Home() {
     localStorage.setItem(ACTIVE_COLOR, activeColorId);
   }, [activeColorId, colors, markingsReady]);
 
-  const go = useCallback((next: Passage, replace = false) => {
+  const go = useCallback((next: Passage, replace = false, requestedBookName?: string | null) => {
+    const selectedBookName = requestedBookName === null ? null : requestedBookName ?? booksRef.current.find((book) => book.nr === next.book)?.name;
+    const url = selectedBookName ? passagePath(next, selectedBookName) : `/${passageSearch(next)}`;
     window.history[replace ? "replaceState" : "pushState"](
       {},
       "",
-      `${window.location.pathname}${passageSearch(next)}`,
+      url,
     );
+    setPathBookSlug(selectedBookName ? bookSlug(selectedBookName) : null);
     localStorage.setItem(LAST_PASSAGE, JSON.stringify(next));
+    setMarkdownMode(false);
+    setMarkdownMessage("");
     setRoute(next);
   }, []);
 
@@ -294,7 +315,7 @@ export default function Home() {
       const book = allBooks.find((item) => normalize(item.name) === normalize(parsed.bookName));
       if (!book) throw new Error(`The daily Scripture book “${parsed.bookName}” is unavailable.`);
       setPendingVerse(parsed.verse);
-      go({ translation: DEFAULT_TRANSLATION, book: book.nr, chapter: parsed.chapter });
+      go({ translation: DEFAULT_TRANSLATION, book: book.nr, chapter: parsed.chapter }, false, book.name);
       setDrawer(null);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Today’s Scripture could not be opened.");
@@ -331,7 +352,9 @@ export default function Home() {
 
         const bookResult = await loadBooks(selectedTranslation.abbreviation);
         const allBooks = valuesByNumber(bookResult.data);
+        booksRef.current = allBooks;
         const selectedBook =
+          (pathBookSlug ? allBooks.find((item) => bookMatchesSlug(item.name, pathBookSlug)) : null) ??
           allBooks.find((item) => item.nr === route.book) ?? allBooks[0];
         if (!selectedBook) throw new Error("This translation has no books.");
 
@@ -355,7 +378,7 @@ export default function Home() {
           normalized.book !== route.book ||
           normalized.chapter !== route.chapter
         ) {
-          go(normalized, true);
+          go(normalized, true, selectedBook.name);
           return;
         }
 
@@ -373,6 +396,8 @@ export default function Home() {
         setPassage(textResult.data);
         setVerified(textResult.verified);
         document.title = `${textResult.data.name} · getBible.Life`;
+        window.history.replaceState({}, "", passagePath(normalized, selectedBook.name));
+        setPathBookSlug(bookSlug(selectedBook.name));
         window.scrollTo({ top: 0, behavior: "smooth" });
       } catch (caught) {
         if (activeRequest === requestId.current) {
@@ -386,7 +411,7 @@ export default function Home() {
     })();
 
     return () => window.clearTimeout(loadingTimer);
-  }, [go, ready, route]);
+  }, [go, pathBookSlug, ready, route]);
 
   useEffect(() => {
     if (!passage || pendingVerse === null) return;
@@ -440,7 +465,7 @@ export default function Home() {
       );
       const nextChapter = delta === 1 ? adjacentChapters[0] : adjacentChapters.at(-1);
       if (nextChapter) {
-        go({ ...route, book: adjacentBook.nr, chapter: nextChapter.chapter });
+        go({ ...route, book: adjacentBook.nr, chapter: nextChapter.chapter }, false, adjacentBook.name);
       }
     },
     [books, chapters, go, passage, route],
@@ -804,6 +829,27 @@ export default function Home() {
     }
   };
 
+  const copyMarkdown = async () => {
+    if (!passage) return;
+    try {
+      await navigator.clipboard.writeText(chapterMarkdown(passage, translation?.distribution_license));
+      setMarkdownMessage("Chapter copied.");
+    } catch {
+      setMarkdownMessage("Copy is unavailable in this browser. Select the text and copy it manually.");
+    }
+  };
+
+  const downloadMarkdown = () => {
+    if (!passage) return;
+    const url = URL.createObjectURL(new Blob([chapterMarkdown(passage, translation?.distribution_license)], { type: "text/markdown;charset=utf-8" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = chapterMarkdownFilename(passage);
+    link.click();
+    URL.revokeObjectURL(url);
+    setMarkdownMessage("Markdown file created.");
+  };
+
   return (
     <main className={drawer ? "drawer-open" : ""}>
       <header className="topbar">
@@ -849,6 +895,9 @@ export default function Home() {
             ›
           </button>
         </nav>
+        <button className="markdown-button" type="button" aria-label={markdownMode ? "Return to Bible reader" : "Open chapter as Markdown"} aria-pressed={markdownMode} onClick={() => { setMarkdownMode((current) => !current); setMarkdownMessage(""); }}>
+          <svg viewBox="0 0 24 12" aria-hidden="true"><circle cx="6" cy="6" r="4" /><circle cx="18" cy="6" r="4" /><path d="M10 6h4M2 4 0 2m22 2 2-2" /></svg>
+        </button>
         <button
           className="markings-button"
           type="button"
@@ -894,7 +943,7 @@ export default function Home() {
             <p className="search-count">{searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"} loaded{searchComplete ? " · end of results" : " · scroll for more"}</p>
             {searchResults.length ? <ol>{searchResults.map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
               setPendingVerse(result.verse);
-              go({ translation: route.translation, book: result.book, chapter: result.chapter });
+              go({ translation: route.translation, book: result.book, chapter: result.chapter }, false, result.bookName);
               setSearchOpen(false);
             }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : searchRunning ? <div className="search-more"><i />Searching…</div> : <p className="search-prompt">No verses match these filters.</p>}
             {searchRunning && searchResults.length ? <div className="search-more"><i />Loading more results</div> : null}
@@ -926,7 +975,7 @@ export default function Home() {
                 value={route.translation}
                 disabled={!translations.length}
                 onChange={(event) =>
-                  go({ ...route, translation: event.target.value })
+                  go({ ...route, translation: event.target.value }, false, null)
                 }
               >
                 {translations.map((item) => (
@@ -942,9 +991,10 @@ export default function Home() {
                 <select
                   value={route.book}
                   disabled={!books.length}
-                  onChange={(event) =>
-                    go({ ...route, book: Number(event.target.value), chapter: 1 })
-                  }
+                  onChange={(event) => {
+                    const nr = Number(event.target.value);
+                    go({ ...route, book: nr, chapter: 1 }, false, books.find((book) => book.nr === nr)?.name);
+                  }}
                 >
                   {books.map((item) => (
                     <option value={item.nr} key={item.nr}>
@@ -1222,6 +1272,15 @@ export default function Home() {
             <i />
             <i />
           </div>
+        ) : markdownMode ? (
+          <section className="markdown-view" aria-label={`${passage.name} Markdown`}>
+            <header>
+              <div><strong>{passage.name}</strong><span>One verse per line</span></div>
+              <div><button type="button" onClick={() => void copyMarkdown()}>Copy</button><button type="button" onClick={downloadMarkdown}>Download .md</button></div>
+            </header>
+            <textarea readOnly spellCheck={false} value={chapterMarkdown(passage, translation?.distribution_license)} aria-label={`${passage.name} plain Markdown text`} />
+            {markdownMessage ? <p role="status">{markdownMessage}</p> : null}
+          </section>
         ) : (
           <article
             className="passage"

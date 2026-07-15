@@ -34,5 +34,32 @@ export function passageSearch(value:Passage):string {
   return `?${new URLSearchParams({translation:value.translation,book:String(value.book),chapter:String(value.chapter)})}`;
 }
 
+export interface FriendlyPassage { translation:string; bookSlug:string; chapter:number }
+
+export function bookSlug(name:string):string {
+  return name.normalize("NFC").trim().replace(/[\s_/]+/g,"-").replace(/^-+|-+$/g,"");
+}
+
+export function passagePath(value:Passage, bookName:string):string {
+  return `/${encodeURIComponent(value.translation.toUpperCase())}/${encodeURIComponent(bookSlug(bookName))}/${value.chapter}`;
+}
+
+export function parsePassagePath(pathname:string):FriendlyPassage|null {
+  const parts=pathname.split("/").filter(Boolean);
+  if(parts.length!==3) return null;
+  try {
+    const translation=decodeURIComponent(parts[0]).toLowerCase();
+    const book=decodeURIComponent(parts[1]);
+    const chapter=Number(parts[2]);
+    if(!/^[a-z0-9_-]+$/.test(translation)||!book||!Number.isSafeInteger(chapter)||chapter<1) return null;
+    return {translation,bookSlug:book,chapter};
+  } catch { return null; }
+}
+
+export function bookMatchesSlug(name:string, slug:string):boolean {
+  const normalize=(value:string)=>bookSlug(value).toLocaleLowerCase().replace(/[^\p{L}\p{N}]/gu,"");
+  return normalize(name)===normalize(slug);
+}
+
 export const fresh = (checkedAt:number, now=Date.now()):boolean => checkedAt > 0 && now-checkedAt < WEEK_MS;
 export const validSha = (sha:string):boolean => /^[a-f0-9]{40}$/i.test(sha.trim());

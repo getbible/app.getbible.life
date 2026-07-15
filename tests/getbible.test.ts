@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { WEEK_MS, fresh, parsePassage, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
+import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, parsePassage, parsePassagePath, passagePath, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
 import { boundaryIntent, boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance.ts";
 import { flattenTranslation, highlightSearchText, searchVersePage, searchVersePageAsync, searchVerses } from "../lib/search.ts";
+import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -15,6 +16,28 @@ test("parses and sanitizes passage URLs",()=>{
 
 test("creates stable shareable queries",()=>{
   assert.equal(passageSearch({translation:"kjv",book:43,chapter:3}),"?translation=kjv&book=43&chapter=3");
+});
+
+test("creates and parses friendly canonical passage paths", () => {
+  assert.equal(passagePath({ translation: "kjv", book: 49, chapter: 5 }, "Ephesians"), "/KJV/Ephesians/5");
+  assert.deepEqual(parsePassagePath("/KJV/Ephesians/5"), { translation: "kjv", bookSlug: "Ephesians", chapter: 5 });
+  assert.equal(bookSlug("1 John"), "1-John");
+  assert.equal(bookMatchesSlug("1 John", "1-john"), true);
+  assert.equal(parsePassagePath("/not/a/passage/5"), null);
+});
+
+test("exports a chapter as plain one-verse-per-line Markdown", () => {
+  const chapter = {
+    translation: "King James Version", abbreviation: "kjv", language: "English", direction: "LTR",
+    book_nr: 49, book_name: "Ephesians", chapter: 5, name: "Ephesians 5",
+    verses: [
+      { chapter: 5, verse: 1, name: "Ephesians 5:1", text: "Be ye therefore followers of God." },
+      { chapter: 5, verse: 2, name: "Ephesians 5:2", text: "And walk in love." },
+    ],
+  };
+  assert.equal(chapterMarkdown(chapter), "1 Be ye therefore followers of God.\n2 And walk in love.");
+  assert.equal(chapterMarkdown(chapter, "Public Domain"), "1 Be ye therefore followers of God.\n2 And walk in love.\n\n---\nPublic Domain");
+  assert.equal(chapterMarkdownFilename(chapter), "Ephesians-5.md");
 });
 
 test("sorts numbered API records numerically",()=>{
