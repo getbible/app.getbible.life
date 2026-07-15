@@ -1,5 +1,6 @@
 "use client";
 
+import Image from "next/image";
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -1412,7 +1413,9 @@ export default function Home() {
       </section>
 
       {passage ? <footer className="site-footer">
-        <span><a href={getBibleLifeUrl(route, passage.book_name)}>getBible.Life</a> <span>The words of eternal life</span></span>
+        <a className="site-footer-logo" href={getBibleLifeUrl(route, passage.book_name)} aria-label={`Open ${passage.name} on getBible.Life`}>
+          <Image src={dark ? "/logo_life_blue.png" : "/logo_life.png"} width={430} height={71} alt="getBible.Life — The words of eternal life" />
+        </a>
         <span>© 2014 - {new Date().getUTCFullYear()} Vast Development Method ™, All Rights Reserved</span>
       </footer> : null}
 
