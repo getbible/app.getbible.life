@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
@@ -32,6 +31,7 @@ import {
   DEFAULT_MARKING_COLORS,
   type Marking,
   type MarkingColor,
+  compareMarkings,
   markedSegments,
   markingMatchesPassage,
   translucentColor,
@@ -44,6 +44,8 @@ const TEXT_SIZE = "getbible-reader:size:v1";
 const MARKINGS = "getbible-reader:markings:v1";
 const MARKING_COLORS = "getbible-reader:marking-colors:v1";
 const ACTIVE_COLOR = "getbible-reader:active-color:v1";
+const READER_FONT = "getbible-reader:font:v1";
+const LIGHT_PALETTE = "getbible-reader:light-palette:v1";
 const INITIAL_PASSAGE: Passage = { translation: "kjv", book: 43, chapter: 3 };
 
 type Drawer = "reader" | "markings" | null;
@@ -55,6 +57,26 @@ interface TextSelection {
   text: string;
   reference: string;
 }
+
+interface WholeVerseSelection {
+  verse: number;
+  text: string;
+  reference: string;
+}
+
+const READER_FONTS = [
+  { id: "serif", name: "Classic serif" },
+  { id: "book", name: "Book serif" },
+  { id: "sans", name: "Clean sans" },
+  { id: "system", name: "System sans" },
+];
+
+const LIGHT_PALETTES = [
+  { id: "white", name: "Pure white" },
+  { id: "paper", name: "Warm paper" },
+  { id: "ivory", name: "Soft ivory" },
+  { id: "mist", name: "Cool mist" },
+];
 
 function storedValue<T>(key: string, fallback: T): T {
   try {
@@ -105,6 +127,10 @@ export default function Home() {
   const [colors, setColors] = useState<MarkingColor[]>(DEFAULT_MARKING_COLORS);
   const [activeColorId, setActiveColorId] = useState(DEFAULT_MARKING_COLORS[0].id);
   const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
+  const [wholeVerseSelection, setWholeVerseSelection] = useState<WholeVerseSelection | null>(null);
+  const [selectedColorId, setSelectedColorId] = useState<string | null>(null);
+  const [readerFont, setReaderFont] = useState("serif");
+  const [lightPalette, setLightPalette] = useState("white");
   const [pendingVerse, setPendingVerse] = useState<number | null>(null);
   const requestId = useRef(0);
   const touchStart = useRef<number | null>(null);
@@ -129,6 +155,11 @@ export default function Home() {
         Math.min(28, Math.max(16, Number(localStorage.getItem(TEXT_SIZE)) || 20)),
       );
       setMarkings(storedValue<Marking[]>(MARKINGS, []));
+      const savedFont = localStorage.getItem(READER_FONT) ?? "serif";
+      const savedPalette = localStorage.getItem(LIGHT_PALETTE) ?? "white";
+      setReaderFont(READER_FONTS.some((font) => font.id === savedFont) ? savedFont : "serif");
+      setLightPalette(LIGHT_PALETTES.some((palette) => palette.id === savedPalette) ? savedPalette : "white");
+      document.documentElement.dataset.palette = savedPalette;
       setColors(usableColors);
       setActiveColorId(
         usableColors.some((color) => color.id === savedActive)
@@ -230,7 +261,7 @@ export default function Home() {
         setChapters(allChapters);
         setPassage(textResult.data);
         setVerified(textResult.verified);
-        document.title = `${textResult.data.name} · getbible.life`;
+        document.title = `${textResult.data.name} · getBible.Life`;
         window.scrollTo({ top: 0, behavior: "smooth" });
       } catch (caught) {
         if (activeRequest === requestId.current) {
@@ -289,6 +320,7 @@ export default function Home() {
       if (event.key === "Escape") {
         setDrawer(null);
         setTextSelection(null);
+        setWholeVerseSelection(null);
       }
       if (event.altKey && event.key === "ArrowLeft") void turn(-1);
       if (event.altKey && event.key === "ArrowRight") void turn(1);
@@ -348,19 +380,30 @@ export default function Home() {
       },
     ]);
     setActiveColorId(colorId);
-    setTextSelection(null);
+        setTextSelection(null);
+        setWholeVerseSelection(null);
     window.getSelection()?.removeAllRanges();
   };
 
-  const toggleVerseMarking = (verseNumber: number, text: string, reference: string) => {
-    const existing = wholeVerseMarking(
-      currentMarkings.filter((marking) => marking.verse === verseNumber),
-    );
-    if (existing) {
-      setMarkings((current) => current.filter((marking) => marking.id !== existing.id));
-    } else {
-      addMarking(verseNumber, text, reference, null, null);
-    }
+  const chooseVerseMarking = (verse: number, text: string, reference: string) => {
+    setTextSelection(null);
+    setWholeVerseSelection({ verse, text, reference });
+  };
+
+  const applyWholeVerseMarking = (selection: WholeVerseSelection, colorId: string) => {
+    setMarkings((current) => {
+      const existingIds = new Set(
+        current
+          .filter((marking) => markingMatchesPassage(marking, route) && marking.verse === selection.verse && marking.start === null && marking.end === null)
+          .map((marking) => marking.id),
+      );
+      return [
+        ...current.filter((marking) => !existingIds.has(marking.id)),
+        { id: identifier(), passage: route, verse: selection.verse, start: null, end: null, quote: selection.text, reference: selection.reference, colorId, createdAt: Date.now() },
+      ];
+    });
+    setActiveColorId(colorId);
+    setWholeVerseSelection(null);
   };
 
   const captureSelection = (
@@ -388,15 +431,24 @@ export default function Home() {
 
   const removeColor = (id: string) => {
     if (colors.length === 1) return;
-    const replacement = colors.find((color) => color.id !== id) as MarkingColor;
+    const color = colors.find((item) => item.id === id);
+    const linked = markings.filter((marking) => marking.colorId === id).length;
+    if (linked && !window.confirm(`Delete “${color?.name ?? "this color"}” and its ${linked} saved marking${linked === 1 ? "" : "s"}? This cannot be undone.`)) return;
     setColors((current) => current.filter((color) => color.id !== id));
-    setMarkings((current) =>
-      current.map((marking) =>
-        marking.colorId === id ? { ...marking, colorId: replacement.id } : marking,
-      ),
-    );
-    if (activeColorId === id) setActiveColorId(replacement.id);
+    setMarkings((current) => current.filter((marking) => marking.colorId !== id));
+    if (selectedColorId === id) setSelectedColorId(null);
+    if (activeColorId === id) setActiveColorId(colors.find((color) => color.id !== id)?.id ?? "");
   };
+
+  const openColorMarkings = (colorId: string) => {
+    setSelectedColorId(colorId);
+    setDrawer("markings");
+  };
+
+  const sortedColorMarkings = useMemo(
+    () => markings.filter((marking) => marking.colorId === selectedColorId).sort(compareMarkings),
+    [markings, selectedColorId],
+  );
 
   const openMarking = (marking: Marking) => {
     setDrawer(null);
@@ -418,9 +470,7 @@ export default function Home() {
           <span />
           <span />
         </button>
-        <Link className="brand" href="/">
-          getbible.life
-        </Link>
+        <span className="brand">getBible.Life</span>
         <span className="top-reference">{passage?.name ?? "Opening Bible"}</span>
         <nav className="compact-navigation" aria-label="Chapter navigation">
           <button
@@ -551,6 +601,25 @@ export default function Home() {
                   ))}
                 </select>
               </label>
+              <label className="field">
+                <span>Reading font</span>
+                <select value={readerFont} onChange={(event) => {
+                  setReaderFont(event.target.value);
+                  localStorage.setItem(READER_FONT, event.target.value);
+                }}>
+                  {READER_FONTS.map((font) => <option value={font.id} key={font.id}>{font.name}</option>)}
+                </select>
+              </label>
+              {!dark ? <label className="field">
+                <span>Light appearance</span>
+                <select value={lightPalette} onChange={(event) => {
+                  setLightPalette(event.target.value);
+                  document.documentElement.dataset.palette = event.target.value;
+                  localStorage.setItem(LIGHT_PALETTE, event.target.value);
+                }}>
+                  {LIGHT_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{palette.name}</option>)}
+                </select>
+              </label> : null}
               <p className="cache-status">
                 {verified ? "Content hash verified" : "Showing saved content"}
               </p>
@@ -613,10 +682,28 @@ export default function Home() {
               Add color
             </button>
 
-            <h2>Saved markings</h2>
-            {markings.length ? (
+            <h2>{selectedColorId ? "Saved markings" : "Marking groups"}</h2>
+            {!selectedColorId && markings.length ? (
+              <div className="marking-groups">
+                {colors.map((color) => {
+                  const count = markings.filter((marking) => marking.colorId === color.id).length;
+                  return <button type="button" key={color.id} onClick={() => setSelectedColorId(color.id)}>
+                    <span className="marking-dot" style={{ backgroundColor: color.value }} />
+                    <span><strong>{color.name}</strong><small>{count} marking{count === 1 ? "" : "s"}</small></span>
+                    <b>›</b>
+                  </button>;
+                })}
+              </div>
+            ) : selectedColorId ? <>
+              <button className="back-to-groups" type="button" onClick={() => setSelectedColorId(null)}>‹ All marking groups</button>
+              <div className="selected-group-title">
+                <span className="marking-dot" style={{ backgroundColor: colorMap.get(selectedColorId)?.value }} />
+                <strong>{colorMap.get(selectedColorId)?.name}</strong>
+                <small>{sortedColorMarkings.length} marking{sortedColorMarkings.length === 1 ? "" : "s"} · Bible order</small>
+              </div>
+              {sortedColorMarkings.length ? (
               <ul className="marking-list">
-                {[...markings].reverse().map((marking) => {
+                {sortedColorMarkings.map((marking) => {
                   const color = colorMap.get(marking.colorId);
                   return (
                     <li key={marking.id}>
@@ -651,7 +738,8 @@ export default function Home() {
                   );
                 })}
               </ul>
-            ) : (
+              ) : <p className="empty-markings">No markings in this group yet.</p>}
+            </> : (
               <p className="empty-markings">No markings yet.</p>
             )}
           </div>
@@ -680,6 +768,7 @@ export default function Home() {
             className="passage"
             dir={passage.direction.toLowerCase()}
             style={{ "--text-size": `${textSize}px` } as CSSProperties}
+            data-reader-font={readerFont}
             onTouchStart={(event) => {
               touchStart.current = event.changedTouches[0]?.clientX ?? null;
             }}
@@ -722,16 +811,15 @@ export default function Home() {
                     <button
                       className="verse-number"
                       type="button"
-                      aria-label={`${wholeMarking ? "Remove marking from" : "Mark"} ${reference}`}
-                      title="Mark the whole verse"
-                      onClick={() =>
-                        toggleVerseMarking(verse.verse, verse.text, reference)
-                      }
+                      aria-label={`Choose marking color for ${reference}`}
+                      title="Choose a color for this verse"
+                      onClick={() => chooseVerseMarking(verse.verse, verse.text, reference)}
                     >
                       {verse.verse}
                     </button>
                     <span
                       className="verse-text"
+                      onDoubleClick={() => wholeColor && openColorMarkings(wholeColor.id)}
                       onPointerUp={(event) =>
                         captureSelection(verse.verse, reference, event)
                       }
@@ -744,6 +832,8 @@ export default function Home() {
                           <mark
                             key={`${segment.start}-${segment.end}`}
                             style={{ backgroundColor: segmentColor.value }}
+                            onDoubleClick={() => openColorMarkings(segmentColor.id)}
+                            title={`Double-click to view all ${segmentColor.name} markings`}
                           >
                             {segment.text}
                           </mark>
@@ -769,9 +859,9 @@ export default function Home() {
         )}
       </section>
 
-      {textSelection ? (
+      {textSelection || wholeVerseSelection ? (
         <div className="selection-toolbar" role="dialog" aria-label="Mark selected text">
-          <span>Mark “{textSelection.text.slice(0, 32)}{textSelection.text.length > 32 ? "…" : ""}”</span>
+          <span>{textSelection ? `Mark “${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}”` : `Mark ${wholeVerseSelection?.reference}`}</span>
           <div>
             {colors.map((color) => (
               <button
@@ -782,14 +872,7 @@ export default function Home() {
                 aria-label={`Mark selection as ${color.name}`}
                 title={color.name}
                 onClick={() =>
-                  addMarking(
-                    textSelection.verse,
-                    textSelection.text,
-                    textSelection.reference,
-                    textSelection.start,
-                    textSelection.end,
-                    color.id,
-                  )
+                  textSelection ? addMarking(textSelection.verse, textSelection.text, textSelection.reference, textSelection.start, textSelection.end, color.id) : wholeVerseSelection && applyWholeVerseMarking(wholeVerseSelection, color.id)
                 }
               />
             ))}
@@ -799,6 +882,7 @@ export default function Home() {
               aria-label="Cancel marking"
               onClick={() => {
                 setTextSelection(null);
+                setWholeVerseSelection(null);
                 window.getSelection()?.removeAllRanges();
               }}
             >

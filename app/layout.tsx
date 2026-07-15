@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "getbible.life",
-  description: "Read, mark, and revisit Scripture with getbible.life.",
+  title: "getBible.Life",
+  description: "Read, mark, and revisit Scripture with getBible.Life.",
   other: {
     "codex-preview": "development",
   },

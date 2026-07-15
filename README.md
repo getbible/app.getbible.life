@@ -1,4 +1,4 @@
-# getbible.life
+# getBible.Life
 
 A production-ready, browser-native Bible reader built with React 19, Next.js/Vinext, TypeScript, and the public [GetBible API v2](https://api.getbible.net/v2/translations.json).
 

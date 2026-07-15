@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { WEEK_MS, fresh, parsePassage, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
-import { markedSegments, markingMatchesPassage, passageKey, translucentColor, wholeVerseMarking } from "../lib/markings.ts";
+import { compareMarkings, markedSegments, markingMatchesPassage, passageKey, translucentColor, wholeVerseMarking } from "../lib/markings.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -60,4 +60,13 @@ test("splits overlapping text markings deterministically", () => {
     { text: "ef", colorId: "blue" },
   ]);
   assert.equal(translucentColor("#fde68a"), "#fde68a45");
+});
+
+test("sorts markings in canonical Bible order", () => {
+  const markings = [
+    { id: "nt", passage: { translation: "kjv", book: 43, chapter: 3 }, verse: 16, start: null, end: null, quote: "John", colorId: "yellow", createdAt: 1 },
+    { id: "ot-later", passage: { translation: "kjv", book: 1, chapter: 2 }, verse: 1, start: null, end: null, quote: "Genesis 2", colorId: "yellow", createdAt: 2 },
+    { id: "ot-first", passage: { translation: "kjv", book: 1, chapter: 1 }, verse: 1, start: null, end: null, quote: "Genesis 1", colorId: "yellow", createdAt: 3 },
+  ];
+  assert.deepEqual(markings.sort(compareMarkings).map((marking) => marking.id), ["ot-first", "ot-later", "nt"]);
 });

@@ -25,6 +25,16 @@ export interface MarkedSegment {
   colorId: string | null;
 }
 
+export function compareMarkings(left: Marking, right: Marking): number {
+  return (
+    left.passage.book - right.passage.book ||
+    left.passage.chapter - right.passage.chapter ||
+    left.verse - right.verse ||
+    (left.start ?? -1) - (right.start ?? -1) ||
+    left.createdAt - right.createdAt
+  );
+}
+
 export const DEFAULT_MARKING_COLORS: MarkingColor[] = [
   { id: "yellow", name: "Promises", value: "#fde68a" },
   { id: "green", name: "Growth", value: "#bbf7d0" },
