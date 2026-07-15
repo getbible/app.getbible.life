@@ -40,6 +40,7 @@ import {
   translucentColor,
   wholeVerseMarking,
 } from "../lib/markings";
+import { EMPTY_BOUNDARY_SCROLL, registerBoundaryScroll } from "../lib/scroll-navigation";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -143,6 +144,7 @@ export default function Home() {
   const requestId = useRef(0);
   const touchStart = useRef<number | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
+  const boundaryScroll = useRef(EMPTY_BOUNDARY_SCROLL);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -338,6 +340,31 @@ export default function Home() {
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
   }, [turn]);
+
+  useEffect(() => {
+    boundaryScroll.current = EMPTY_BOUNDARY_SCROLL;
+    if (drawer || loading || !passage) return;
+
+    const wheel = (event: WheelEvent) => {
+      if (!event.deltaY) return;
+      const direction = event.deltaY > 0 ? 1 : -1;
+      const root = document.documentElement;
+      const atBoundary = direction === 1
+        ? window.innerHeight + window.scrollY >= root.scrollHeight - 2
+        : window.scrollY <= 1;
+      const result = registerBoundaryScroll(
+        boundaryScroll.current,
+        direction,
+        atBoundary,
+        Date.now(),
+      );
+      boundaryScroll.current = result.state;
+      if (result.navigate) void turn(direction);
+    };
+
+    window.addEventListener("wheel", wheel, { passive: true });
+    return () => window.removeEventListener("wheel", wheel);
+  }, [drawer, loading, passage, route, turn]);
 
   const currentMarkings = useMemo(
     () => markings.filter((marking) => markingMatchesPassage(marking, route)),
@@ -743,19 +770,6 @@ export default function Home() {
               Add color
             </button>
 
-            <h2>Backup and reset</h2>
-            <div className="marking-actions">
-              <button type="button" onClick={exportMarkings} disabled={!markings.length}>Export</button>
-              <button type="button" onClick={() => importInput.current?.click()}>Import and merge</button>
-              <button className="danger-action" type="button" onClick={deleteAllMarkings} disabled={!markings.length}>Delete all</button>
-            </div>
-            <input ref={importInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => {
-              const file = event.target.files?.[0];
-              if (file) void importMarkings(file);
-              event.target.value = "";
-            }} />
-            {markingMessage ? <p className="marking-message" role="status">{markingMessage}</p> : null}
-
             <h2>{selectedColorId ? "Saved markings" : "Marking groups"}</h2>
             {!selectedColorId && markings.length ? (
               <div className="marking-groups">
@@ -816,6 +830,21 @@ export default function Home() {
             </> : (
               <p className="empty-markings">No markings yet.</p>
             )}
+
+            <section className="backup-section">
+              <h2>Backup and reset</h2>
+              <div className="marking-actions">
+                <button type="button" onClick={exportMarkings} disabled={!markings.length}>Export</button>
+                <button type="button" onClick={() => importInput.current?.click()}>Import and merge</button>
+                <button className="danger-action" type="button" onClick={deleteAllMarkings} disabled={!markings.length}>Delete all</button>
+              </div>
+              <input ref={importInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => {
+                const file = event.target.files?.[0];
+                if (file) void importMarkings(file);
+                event.target.value = "";
+              }} />
+              {markingMessage ? <p className="marking-message" role="status">{markingMessage}</p> : null}
+            </section>
           </div>
         ) : null}
       </aside>

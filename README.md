@@ -7,6 +7,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Every translation, language, book, chapter, and verse is discovered from the API; no Bible structure is hard-coded.
 - Shareable URLs and browser back/forward navigation.
 - Previous/next paging across book boundaries, `Alt` + arrow keyboard navigation, and mobile swipe navigation.
+- Deliberate edge scrolling: a second distinct downward scroll at the bottom opens the next chapter, while the same gesture at the top opens the previous chapter.
 - Minimal full-page reading with a compact header and collapsible passage navigation.
 - Pure black-and-white light and dark themes, adjustable scripture size, responsive layouts, RTL support, and accessible controls.
 - Persistent markings: click a verse number to mark a whole verse, or select a word or phrase to mark only that text.

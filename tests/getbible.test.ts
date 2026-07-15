@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { WEEK_MS, fresh, parsePassage, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking } from "../lib/markings.ts";
+import { EMPTY_BOUNDARY_SCROLL, registerBoundaryScroll } from "../lib/scroll-navigation.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -99,4 +100,21 @@ test("validates portable markings backups", () => {
   assert.deepEqual(parseMarkingsBackup(backup), backup);
   assert.throws(() => parseMarkingsBackup({ version: 2, colors: [], markings: [] }), /unsupported format/);
   assert.throws(() => parseMarkingsBackup({ version: 1, colors: [{ id: "x", name: "Bad", value: "red" }], markings: [] }), /invalid data/);
+});
+
+test("requires two separate boundary scroll gestures before changing chapters", () => {
+  const first = registerBoundaryScroll(EMPTY_BOUNDARY_SCROLL, 1, true, 1_000);
+  assert.equal(first.navigate, false);
+  const continuous = registerBoundaryScroll(first.state, 1, true, 1_100);
+  assert.equal(continuous.navigate, false);
+  const second = registerBoundaryScroll(continuous.state, 1, true, 1_350);
+  assert.equal(second.navigate, true);
+  assert.deepEqual(second.state, EMPTY_BOUNDARY_SCROLL);
+});
+
+test("resets boundary scrolling after leaving the edge, reversing, or waiting", () => {
+  const first = registerBoundaryScroll(EMPTY_BOUNDARY_SCROLL, -1, true, 1_000);
+  assert.equal(registerBoundaryScroll(first.state, 1, true, 1_300).navigate, false);
+  assert.deepEqual(registerBoundaryScroll(first.state, -1, false, 1_300).state, EMPTY_BOUNDARY_SCROLL);
+  assert.equal(registerBoundaryScroll(first.state, -1, true, 2_500).navigate, false);
 });
