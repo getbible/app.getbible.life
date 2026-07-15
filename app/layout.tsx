@@ -13,8 +13,8 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "GetBible Reader",
-  description: "A fast, focused Bible reader powered directly by the GetBible API.",
+  title: "getbible.life",
+  description: "Read, mark, and revisit Scripture with getbible.life.",
   other: {
     "codex-preview": "development",
   },

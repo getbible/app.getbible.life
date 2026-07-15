@@ -1,4 +1,4 @@
-# GetBible Reader
+# getbible.life
 
 A production-ready, browser-native Bible reader built with React 19, Next.js/Vinext, TypeScript, and the public [GetBible API v2](https://api.getbible.net/v2/translations.json).
 
@@ -7,7 +7,10 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Every translation, language, book, chapter, and verse is discovered from the API; no Bible structure is hard-coded.
 - Shareable URLs and browser back/forward navigation.
 - Previous/next paging across book boundaries, `Alt` + arrow keyboard navigation, and mobile swipe navigation.
-- Light and dark themes, adjustable scripture size, responsive layouts, RTL support, and accessible form labels.
+- Minimal full-page reading with a compact header and collapsible passage navigation.
+- Pure black-and-white light and dark themes, adjustable scripture size, responsive layouts, RTL support, and accessible controls.
+- Persistent markings: click a verse number to mark a whole verse, or select a word or phrase to mark only that text.
+- Custom marking colors and category names, plus a searchable reading history in the Markings drawer.
 - Browser Cache Storage for fast repeat visits and offline fallback.
 - Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.
 - Translation, book, and chapter indexes refresh weekly. Changed upstream hashes invalidate only the affected cache branch.
@@ -58,7 +61,7 @@ The deployment script runs all tests, requires Wrangler authentication, and depl
 
 ## Cache behavior
 
-The application stores JSON responses in the browser Cache Storage API and stores only timestamps and SHA metadata in `localStorage`. If the API is temporarily unavailable, a previously cached chapter remains readable and is marked as saved rather than verified. The reader includes a **Clear local cache** action.
+The application stores JSON responses in the browser Cache Storage API. Timestamps, SHA metadata, marking colors, and saved markings are stored in `localStorage`, so annotations remain private to the current browser and device. If the API is temporarily unavailable, a previously cached chapter remains readable and is marked as saved rather than verified. The reader includes a **Clear local cache** action.
 
 ## License
 
