@@ -9,15 +9,15 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Previous/next paging across book boundaries, `Alt` + arrow keyboard navigation, and mobile swipe navigation.
 - Continuous reading: scrolling beyond the bottom opens the next chapter, while scrolling beyond the top opens the previous chapter.
 - Minimal full-page reading with a compact header and collapsible passage navigation.
-- Pure black-and-white light and dark themes, adjustable scripture size, responsive layouts, RTL support, and accessible controls.
+- Selectable light and dark reading palettes, including pure black, warm brown, charcoal, and midnight themes, plus adjustable scripture size, RTL support, and accessible controls.
 - Persistent markings: click a verse number to mark a whole verse, or select a word or phrase to mark only that text.
-- Custom marking colors and category names, plus a searchable reading history in the Markings drawer.
+- Custom marking colors and category names, with marking groups listed first and the selected group's color retained as the next marking default.
 - Portable JSON backup and merge-import for markings, with duplicate prevention and safe bulk deletion.
 - Long-term verse notes with Bible-order navigation; backups include notes, markings, and custom color groups.
 - Verse notes and whole-verse markings follow the canonical book/chapter/verse across translations; selected word and phrase markings remain translation-specific.
 - The visible reading position is remembered down to the verse and restored on the next visit.
 - First-time readers open the daily Scripture in King James Version; clicking `getBible.Life` returns to that day’s cached verse in KJV.
-- Page-width and full-screen-width reading modes, selectable fonts, and light reading palettes.
+- Page-width and full-screen-width reading modes, selectable fonts, edge-to-edge mobile reading, and touch-sized controls.
 - Browser Cache Storage for fast repeat visits and offline fallback.
 - Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.
 - Translation, book, and chapter indexes refresh weekly. Changed upstream hashes invalidate only the affected cache branch.

@@ -44,6 +44,7 @@ import {
 import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyReference } from "../lib/daily";
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryTurn, readerStorageKeys } from "../lib/reader-state";
+import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -53,6 +54,7 @@ const MARKING_COLORS = "getbible-reader:marking-colors:v1";
 const ACTIVE_COLOR = "getbible-reader:active-color:v1";
 const READER_FONT = "getbible-reader:font:v1";
 const LIGHT_PALETTE = "getbible-reader:light-palette:v1";
+const DARK_PALETTE = "getbible-reader:dark-palette:v1";
 const READING_WIDTH = "getbible-reader:reading-width:v1";
 const NOTES = "getbible-reader:notes:v1";
 const LAST_READING = "getbible-reader:last-reading:v1";
@@ -81,13 +83,6 @@ const READER_FONTS = [
   { id: "book", name: "Book serif" },
   { id: "sans", name: "Clean sans" },
   { id: "system", name: "System sans" },
-];
-
-const LIGHT_PALETTES = [
-  { id: "white", name: "Pure white" },
-  { id: "paper", name: "Warm paper" },
-  { id: "ivory", name: "Soft ivory" },
-  { id: "mist", name: "Cool mist" },
 ];
 
 function storedValue<T>(key: string, fallback: T): T {
@@ -143,6 +138,7 @@ export default function Home() {
   const [selectedColorId, setSelectedColorId] = useState<string | null>(null);
   const [readerFont, setReaderFont] = useState("serif");
   const [lightPalette, setLightPalette] = useState("white");
+  const [darkPalette, setDarkPalette] = useState("black");
   const [readingWidth, setReadingWidth] = useState<"page" | "full">("page");
   const [colorSearch, setColorSearch] = useState("");
   const [verifiedInfo, setVerifiedInfo] = useState(false);
@@ -188,10 +184,13 @@ export default function Home() {
       setNotes(mergeNotes([], storedValue<VerseNote[]>(NOTES, [])));
       const savedFont = localStorage.getItem(READER_FONT) ?? "serif";
       const savedPalette = localStorage.getItem(LIGHT_PALETTE) ?? "white";
+      const savedDarkPalette = localStorage.getItem(DARK_PALETTE) ?? "black";
       setReaderFont(READER_FONTS.some((font) => font.id === savedFont) ? savedFont : "serif");
-      setLightPalette(LIGHT_PALETTES.some((palette) => palette.id === savedPalette) ? savedPalette : "white");
+      setLightPalette(validPalette(LIGHT_PALETTES, savedPalette, "white"));
+      setDarkPalette(validPalette(DARK_PALETTES, savedDarkPalette, "black"));
       setReadingWidth(localStorage.getItem(READING_WIDTH) === "full" ? "full" : "page");
       document.documentElement.dataset.palette = savedPalette;
+      document.documentElement.dataset.darkPalette = savedDarkPalette;
       setColors(usableColors);
       setActiveColorId(
         usableColors.some((color) => color.id === savedActive)
@@ -549,9 +548,9 @@ export default function Home() {
     if (activeColorId === id) setActiveColorId(colors.find((color) => color.id !== id)?.id ?? "");
   };
 
-  const openColorMarkings = (colorId: string) => {
+  const selectMarkingGroup = (colorId: string) => {
     setSelectedColorId(colorId);
-    setDrawer("markings");
+    setActiveColorId(colorId);
   };
 
   const sortedColorMarkings = useMemo(
@@ -824,7 +823,16 @@ export default function Home() {
                 }}>
                   {LIGHT_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{palette.name}</option>)}
                 </select>
-              </label> : null}
+              </label> : <label className="field">
+                <span>Dark appearance</span>
+                <select value={darkPalette} onChange={(event) => {
+                  setDarkPalette(event.target.value);
+                  document.documentElement.dataset.darkPalette = event.target.value;
+                  localStorage.setItem(DARK_PALETTE, event.target.value);
+                }}>
+                  {DARK_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{palette.name}</option>)}
+                </select>
+              </label>}
               <p className="cache-status">
                 {verified ? "Content hash verified" : "Showing saved content"}
               </p>
@@ -854,55 +862,12 @@ export default function Home() {
               event.target.value = "";
             }} />
             {studyTab === "markings" ? <>
-            <h2>Colors</h2>
-            {colors.length > 8 ? <label className="color-search">
-              <span>Find a color group</span>
-              <input type="search" value={colorSearch} placeholder={`Search ${colors.length} groups`} onChange={(event) => setColorSearch(event.target.value)} />
-            </label> : null}
-            <div className="color-manager scalable">
-              {visibleColors.map((color) => (
-                <div className="color-row" key={color.id}>
-                  <button
-                    className={color.id === activeColorId ? "color-swatch active" : "color-swatch"}
-                    type="button"
-                    style={{ backgroundColor: color.value }}
-                    aria-label={`Use ${color.name}`}
-                    onClick={() => setActiveColorId(color.id)}
-                  />
-                  <input
-                    aria-label={`${color.name} color`}
-                    type="color"
-                    value={color.value}
-                    onChange={(event) => updateColor(color.id, { value: event.target.value })}
-                  />
-                  <input
-                    aria-label="Color name"
-                    type="text"
-                    value={color.name}
-                    onChange={(event) => updateColor(color.id, { name: event.target.value })}
-                  />
-                  <button
-                    className="remove-color"
-                    type="button"
-                    disabled={colors.length === 1}
-                    aria-label={`Remove ${color.name}`}
-                    onClick={() => removeColor(color.id)}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-            <button className="add-color" type="button" onClick={addColor}>
-              Add color
-            </button>
-
             <h2>{selectedColorId ? "Saved markings" : "Marking groups"}</h2>
             {!selectedColorId && markings.length ? (
               <div className="marking-groups">
                 {visibleColors.map((color) => {
                   const count = markings.filter((marking) => marking.colorId === color.id).length;
-                  return <button type="button" key={color.id} onClick={() => setSelectedColorId(color.id)}>
+                  return <button type="button" key={color.id} onClick={() => selectMarkingGroup(color.id)}>
                     <span className="marking-dot" style={{ backgroundColor: color.value }} />
                     <span><strong>{color.name}</strong><small>{count} marking{count === 1 ? "" : "s"}</small></span>
                     <b>›</b>
@@ -957,6 +922,32 @@ export default function Home() {
             </> : (
               <p className="empty-markings">No markings yet.</p>
             )}
+
+            <section className="color-section">
+              <h2>Colors</h2>
+              {colors.length > 8 ? <label className="color-search">
+                <span>Find a color group</span>
+                <input type="search" value={colorSearch} placeholder={`Search ${colors.length} groups`} onChange={(event) => setColorSearch(event.target.value)} />
+              </label> : null}
+              <div className="color-manager scalable">
+                {visibleColors.map((color) => (
+                  <div className="color-row" key={color.id}>
+                    <button
+                      className={color.id === activeColorId ? "color-swatch active" : "color-swatch"}
+                      type="button"
+                      style={{ backgroundColor: color.value }}
+                      aria-label={`Use ${color.name}`}
+                      data-tooltip={`Use ${color.name}`}
+                      onClick={() => setActiveColorId(color.id)}
+                    />
+                    <input aria-label={`${color.name} color`} type="color" value={color.value} onChange={(event) => updateColor(color.id, { value: event.target.value })} />
+                    <input aria-label="Color name" type="text" value={color.name} onChange={(event) => updateColor(color.id, { name: event.target.value })} />
+                    <button className="remove-color" type="button" disabled={colors.length === 1} aria-label={`Remove ${color.name}`} onClick={() => removeColor(color.id)}>×</button>
+                  </div>
+                ))}
+              </div>
+              <button className="add-color" type="button" onClick={addColor}>Add color</button>
+            </section>
 
             <section className="backup-section">
               <h2>Backup and reset</h2>
@@ -1078,7 +1069,6 @@ export default function Home() {
                     </button>
                     <span
                       className="verse-text"
-                      onDoubleClick={() => wholeColor && openColorMarkings(wholeColor.id)}
                       onPointerUp={(event) =>
                         captureSelection(verse.verse, reference, event)
                       }
@@ -1091,8 +1081,6 @@ export default function Home() {
                           <mark
                             key={`${segment.start}-${segment.end}`}
                             style={{ backgroundColor: segmentColor.value }}
-                            onDoubleClick={() => openColorMarkings(segmentColor.id)}
-                            title={`Double-click to view all ${segmentColor.name} markings`}
                           >
                             {segment.text}
                           </mark>
@@ -1133,7 +1121,7 @@ export default function Home() {
                 className="selection-color"
                 style={{ backgroundColor: color.value }}
                 aria-label={`Mark selection as ${color.name}`}
-                title={color.name}
+                data-tooltip={color.name}
                 onClick={() =>
                   textSelection ? addMarking(textSelection.verse, textSelection.text, textSelection.reference, textSelection.start, textSelection.end, color.id) : wholeVerseSelection && applyWholeVerseMarking(wholeVerseSelection, color.id)
                 }

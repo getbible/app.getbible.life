@@ -19,6 +19,30 @@
   --border: #303030;
 }
 
+:root[data-theme="dark"][data-dark-palette="brown"] {
+  --background: #1c1511;
+  --foreground: #f8eee5;
+  --muted: #b9a89a;
+  --subtle: #2a201a;
+  --border: #4a392f;
+}
+
+:root[data-theme="dark"][data-dark-palette="charcoal"] {
+  --background: #18191b;
+  --foreground: #f3f4f6;
+  --muted: #a5a7ab;
+  --subtle: #232528;
+  --border: #3a3d42;
+}
+
+:root[data-theme="dark"][data-dark-palette="navy"] {
+  --background: #0c1420;
+  --foreground: #eef5ff;
+  --muted: #9cacc0;
+  --subtle: #142235;
+  --border: #2a3e57;
+}
+
 :root:not([data-theme="dark"])[data-palette="paper"] {
   --background: #fbf7ee;
   --foreground: #211d18;
@@ -447,6 +471,12 @@ summary:focus-visible {
   font-size: 10px;
 }
 
+.color-section {
+  margin-top: 24px;
+  padding-top: 2px;
+  border-top: 1px solid var(--border);
+}
+
 .markings-panel h2 {
   margin: 23px 0 10px;
 }
@@ -492,6 +522,7 @@ summary:focus-visible {
 }
 
 .color-swatch {
+  position: relative;
   width: 22px;
   height: 22px;
   padding: 0;
@@ -1051,12 +1082,42 @@ summary:focus-visible {
 }
 
 .selection-color {
+  position: relative;
   width: 22px;
   height: 22px;
   padding: 0;
   border: 1px solid rgb(0 0 0 / 22%);
   border-radius: 50%;
   cursor: pointer;
+}
+
+.selection-color::after,
+.color-swatch::after {
+  position: absolute;
+  z-index: 80;
+  bottom: calc(100% + 7px);
+  left: 50%;
+  visibility: hidden;
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--background);
+  color: var(--foreground);
+  content: attr(data-tooltip);
+  font-size: 9px;
+  font-weight: 650;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-50%);
+  white-space: nowrap;
+}
+
+.selection-color:hover::after,
+.selection-color:focus-visible::after,
+.color-swatch:hover::after,
+.color-swatch:focus-visible::after {
+  visibility: visible;
+  opacity: 1;
 }
 
 .selection-none {
@@ -1148,11 +1209,11 @@ summary:focus-visible {
   }
 
   .reading-stage {
-    padding: 8px 25px 78px 35px;
+    padding: 8px 3px 78px;
   }
 
   .passage-line {
-    margin-inline-start: -18px;
+    margin-inline-start: 0;
   }
 
   .verses {
@@ -1165,12 +1226,12 @@ summary:focus-visible {
   }
 
   .verses li {
-    padding-inline: 5px;
+    padding-inline: 0;
   }
 
   .verse-number {
-    min-width: 2em;
-    margin-inline-start: -2em;
+    min-width: 1.8em;
+    margin-inline-start: 0;
   }
 
   .mobile-navigation {
@@ -1212,6 +1273,57 @@ summary:focus-visible {
     bottom: 58px;
     flex-direction: column;
     gap: 7px;
+  }
+}
+
+@media (pointer: coarse) {
+  .menu-button,
+  .markings-button,
+  .theme-button,
+  .compact-navigation button,
+  .drawer-header button,
+  .chapter-grid button,
+  .study-tabs button,
+  .marking-groups button,
+  .marking-link,
+  .note-link,
+  .edit-note,
+  .remove-color,
+  .delete-marking {
+    min-height: 44px;
+  }
+
+  .selection-toolbar > div {
+    max-width: calc(100vw - 34px);
+    overflow-x: auto;
+    padding: 5px 1px;
+  }
+
+  .selection-color {
+    width: 36px;
+    min-width: 36px;
+    height: 36px;
+  }
+
+  .selection-none,
+  .add-note-from-palette,
+  .cancel-selection {
+    min-width: 44px;
+    height: 36px;
+  }
+
+  .color-swatch {
+    width: 34px;
+    height: 34px;
+  }
+
+  .color-row {
+    grid-template-columns: 38px 38px 1fr 44px;
+  }
+
+  .color-row input[type="color"] {
+    width: 38px;
+    height: 38px;
   }
 }
 

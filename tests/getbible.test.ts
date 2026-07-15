@@ -5,6 +5,7 @@ import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatches
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
 import { boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
+import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -154,4 +155,11 @@ test("changes chapters only when scrolling outward at a reading boundary", () =>
 
 test("clears only getBible.Life reader storage keys", () => {
   assert.deepEqual(readerStorageKeys(["unrelated", "getbible-reader:notes:v1", "getbible-reader:last:v1"]), ["getbible-reader:notes:v1", "getbible-reader:last:v1"]);
+});
+
+test("offers stable light and dark reading palettes", () => {
+  assert.deepEqual(DARK_PALETTES.map(({ id }) => id), ["black", "brown", "charcoal", "navy"]);
+  assert.equal(validPalette(DARK_PALETTES, "brown", "black"), "brown");
+  assert.equal(validPalette(DARK_PALETTES, "missing", "black"), "black");
+  assert.equal(validPalette(LIGHT_PALETTES, null, "white"), "white");
 });
