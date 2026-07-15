@@ -1,4 +1,5 @@
 import type { Passage } from "./getbible";
+import { DEPLOYMENT_MARKING_COLORS } from "../config/reader.ts";
 
 export interface MarkingColor {
   id: string;
@@ -35,12 +36,60 @@ export function compareMarkings(left: Marking, right: Marking): number {
   );
 }
 
-export const DEFAULT_MARKING_COLORS: MarkingColor[] = [
-  { id: "yellow", name: "Promises", value: "#fde68a" },
-  { id: "green", name: "Growth", value: "#bbf7d0" },
-  { id: "blue", name: "Study", value: "#bfdbfe" },
-  { id: "pink", name: "Prayer", value: "#fbcfe8" },
-];
+export const DEFAULT_MARKING_COLORS: MarkingColor[] = DEPLOYMENT_MARKING_COLORS;
+
+export interface MarkingsBackup {
+  version: 1;
+  exportedAt: string;
+  colors: MarkingColor[];
+  markings: Marking[];
+}
+
+export function markingIdentity(marking: Marking): string {
+  return [passageKey(marking.passage), marking.verse, marking.start ?? "all", marking.end ?? "all", marking.quote, marking.colorId].join("|");
+}
+
+export function mergeMarkings(current: Marking[], imported: Marking[]): Marking[] {
+  const seen = new Set(current.map(markingIdentity));
+  const ids = new Set(current.map((marking) => marking.id));
+  const merged = [...current];
+  for (const marking of imported) {
+    const key = markingIdentity(marking);
+    if (!seen.has(key)) {
+      let id = marking.id;
+      let suffix = 1;
+      while (ids.has(id)) id = `${marking.id}-imported-${suffix++}`;
+      merged.push({ ...marking, id });
+      seen.add(key);
+      ids.add(id);
+    }
+  }
+  return merged;
+}
+
+export function mergeColors(current: MarkingColor[], imported: MarkingColor[]): MarkingColor[] {
+  const merged = [...current];
+  const ids = new Set(current.map((color) => color.id));
+  for (const color of imported) {
+    if (!ids.has(color.id)) {
+      merged.push(color);
+      ids.add(color.id);
+    }
+  }
+  return merged;
+}
+
+export function parseMarkingsBackup(value: unknown): MarkingsBackup {
+  if (!value || typeof value !== "object") throw new Error("This is not a getBible.Life markings backup.");
+  const backup = value as Partial<MarkingsBackup>;
+  if (backup.version !== 1 || !Array.isArray(backup.colors) || !Array.isArray(backup.markings)) {
+    throw new Error("This markings backup has an unsupported format.");
+  }
+  const colorsValid = backup.colors.every((color) => color && typeof color.id === "string" && typeof color.name === "string" && /^#[0-9a-f]{6}$/i.test(color.value));
+  const markingsValid = backup.markings.every((marking) => marking && typeof marking.id === "string" && typeof marking.colorId === "string" && typeof marking.verse === "number" && typeof marking.quote === "string" && typeof marking.createdAt === "number" && marking.passage && typeof marking.passage.translation === "string" && typeof marking.passage.book === "number" && typeof marking.passage.chapter === "number");
+  if (!colorsValid || !markingsValid) throw new Error("This markings backup contains invalid data.");
+  return backup as MarkingsBackup;
+}
 
 export function passageKey(passage: Passage): string {
   return `${passage.translation}/${passage.book}/${passage.chapter}`;

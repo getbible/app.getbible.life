@@ -377,6 +377,33 @@ summary:focus-visible {
   gap: 7px;
 }
 
+.color-manager.scalable {
+  max-height: 310px;
+  overflow-y: auto;
+  padding: 3px 5px 3px 3px;
+  scrollbar-color: var(--muted) var(--subtle);
+  scrollbar-width: thin;
+}
+
+.color-search {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  margin-bottom: 9px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.color-search input {
+  height: 34px;
+  padding: 0 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: 11px;
+}
+
 .color-row {
   display: grid;
   grid-template-columns: 26px 28px 1fr 28px;
@@ -438,6 +465,45 @@ summary:focus-visible {
 
 .add-color {
   margin-top: 12px;
+}
+
+.marking-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
+}
+
+.marking-actions button {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.marking-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
+
+.marking-actions .danger-action {
+  margin-inline-start: auto;
+  border-color: #b42318;
+  color: #b42318;
+}
+
+.file-input {
+  display: none;
+}
+
+.marking-message {
+  margin: 9px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
 }
 
 .marking-list {
@@ -576,6 +642,12 @@ summary:focus-visible {
   padding: 10px clamp(28px, 6vw, 82px) 74px;
 }
 
+.reading-stage[data-reading-width="full"] {
+  width: 100%;
+  max-width: none;
+  padding-inline: clamp(28px, 3vw, 54px);
+}
+
 .passage {
   min-height: calc(100vh - 58px);
   background: var(--background);
@@ -602,8 +674,46 @@ summary:focus-visible {
   text-transform: none;
 }
 
-.passage-line span:last-child {
+.passage-line > :last-child {
   margin-inline-start: auto;
+}
+
+.verification-button {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px dotted currentColor;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: inherit;
+  letter-spacing: inherit;
+  text-transform: uppercase;
+}
+
+.verification-info {
+  position: relative;
+  margin: -3px 0 10px;
+  padding: 9px 32px 9px 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--subtle);
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+}
+
+.verification-info button {
+  position: absolute;
+  top: 4px;
+  right: 5px;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 16px;
 }
 
 .verses {

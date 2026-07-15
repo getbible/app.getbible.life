@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { WEEK_MS, fresh, parsePassage, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
-import { compareMarkings, markedSegments, markingMatchesPassage, passageKey, translucentColor, wholeVerseMarking } from "../lib/markings.ts";
+import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking } from "../lib/markings.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -69,4 +69,34 @@ test("sorts markings in canonical Bible order", () => {
     { id: "ot-first", passage: { translation: "kjv", book: 1, chapter: 1 }, verse: 1, start: null, end: null, quote: "Genesis 1", colorId: "yellow", createdAt: 3 },
   ];
   assert.deepEqual(markings.sort(compareMarkings).map((marking) => marking.id), ["ot-first", "ot-later", "nt"]);
+});
+
+test("loads marking groups from deployment configuration", () => {
+  assert.deepEqual(DEFAULT_MARKING_COLORS.map((color) => color.name), ["Promises", "Growth", "Study", "Prayer"]);
+});
+
+test("merges imported colors and markings without duplicates", () => {
+  const passage = { translation: "kjv", book: 43, chapter: 3 };
+  const existing = { id: "same", passage, verse: 16, start: null, end: null, quote: "For God", colorId: "yellow", createdAt: 1 };
+  const collision = { id: "same", passage, verse: 17, start: null, end: null, quote: "For God sent", colorId: "blue", createdAt: 2 };
+  const merged = mergeMarkings([existing], [existing, collision]);
+
+  assert.equal(merged.length, 2);
+  assert.equal(merged[1].id, "same-imported-1");
+  assert.deepEqual(mergeColors([{ id: "yellow", name: "Promises", value: "#fde68a" }], [
+    { id: "yellow", name: "Duplicate", value: "#ffffff" },
+    { id: "blue", name: "Study", value: "#bfdbfe" },
+  ]).map((color) => color.id), ["yellow", "blue"]);
+});
+
+test("validates portable markings backups", () => {
+  const backup = {
+    version: 1 as const,
+    exportedAt: "2026-07-15T00:00:00.000Z",
+    colors: [{ id: "yellow", name: "Promises", value: "#fde68a" }],
+    markings: [{ id: "one", passage: { translation: "kjv", book: 1, chapter: 1 }, verse: 1, start: null, end: null, quote: "In the beginning", colorId: "yellow", createdAt: 1 }],
+  };
+  assert.deepEqual(parseMarkingsBackup(backup), backup);
+  assert.throws(() => parseMarkingsBackup({ version: 2, colors: [], markings: [] }), /unsupported format/);
+  assert.throws(() => parseMarkingsBackup({ version: 1, colors: [{ id: "x", name: "Bad", value: "red" }], markings: [] }), /invalid data/);
 });

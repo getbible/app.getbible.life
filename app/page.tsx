@@ -32,6 +32,9 @@ import {
   type Marking,
   type MarkingColor,
   compareMarkings,
+  mergeColors,
+  mergeMarkings,
+  parseMarkingsBackup,
   markedSegments,
   markingMatchesPassage,
   translucentColor,
@@ -46,6 +49,7 @@ const MARKING_COLORS = "getbible-reader:marking-colors:v1";
 const ACTIVE_COLOR = "getbible-reader:active-color:v1";
 const READER_FONT = "getbible-reader:font:v1";
 const LIGHT_PALETTE = "getbible-reader:light-palette:v1";
+const READING_WIDTH = "getbible-reader:reading-width:v1";
 const INITIAL_PASSAGE: Passage = { translation: "kjv", book: 43, chapter: 3 };
 
 type Drawer = "reader" | "markings" | null;
@@ -131,9 +135,14 @@ export default function Home() {
   const [selectedColorId, setSelectedColorId] = useState<string | null>(null);
   const [readerFont, setReaderFont] = useState("serif");
   const [lightPalette, setLightPalette] = useState("white");
+  const [readingWidth, setReadingWidth] = useState<"page" | "full">("page");
+  const [colorSearch, setColorSearch] = useState("");
+  const [verifiedInfo, setVerifiedInfo] = useState(false);
+  const [markingMessage, setMarkingMessage] = useState("");
   const [pendingVerse, setPendingVerse] = useState<number | null>(null);
   const requestId = useRef(0);
   const touchStart = useRef<number | null>(null);
+  const importInput = useRef<HTMLInputElement | null>(null);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -159,6 +168,7 @@ export default function Home() {
       const savedPalette = localStorage.getItem(LIGHT_PALETTE) ?? "white";
       setReaderFont(READER_FONTS.some((font) => font.id === savedFont) ? savedFont : "serif");
       setLightPalette(LIGHT_PALETTES.some((palette) => palette.id === savedPalette) ? savedPalette : "white");
+      setReadingWidth(localStorage.getItem(READING_WIDTH) === "full" ? "full" : "page");
       document.documentElement.dataset.palette = savedPalette;
       setColors(usableColors);
       setActiveColorId(
@@ -449,6 +459,42 @@ export default function Home() {
     () => markings.filter((marking) => marking.colorId === selectedColorId).sort(compareMarkings),
     [markings, selectedColorId],
   );
+  const visibleColors = useMemo(() => {
+    const search = colorSearch.trim().toLocaleLowerCase();
+    return search ? colors.filter((color) => color.name.toLocaleLowerCase().includes(search)) : colors;
+  }, [colorSearch, colors]);
+
+  const exportMarkings = () => {
+    const backup = { version: 1, exportedAt: new Date().toISOString(), colors, markings } as const;
+    const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `getBible-Life-markings-${new Date().toISOString().slice(0, 10)}.json`;
+    link.click();
+    URL.revokeObjectURL(url);
+    setMarkingMessage(`Exported ${markings.length} marking${markings.length === 1 ? "" : "s"}.`);
+  };
+
+  const importMarkings = async (file: File) => {
+    try {
+      const backup = parseMarkingsBackup(JSON.parse(await file.text()));
+      const previousCount = markings.length;
+      const nextColors = mergeColors(colors, backup.colors);
+      const nextMarkings = mergeMarkings(markings, backup.markings).filter((marking) => nextColors.some((color) => color.id === marking.colorId));
+      setColors(nextColors);
+      setMarkings(nextMarkings);
+      setMarkingMessage(`Imported ${nextMarkings.length - previousCount} new marking${nextMarkings.length - previousCount === 1 ? "" : "s"}; existing markings were kept.`);
+    } catch (caught) {
+      setMarkingMessage(caught instanceof Error ? caught.message : "The markings backup could not be imported.");
+    }
+  };
+
+  const deleteAllMarkings = () => {
+    if (!markings.length || !window.confirm(`Delete all ${markings.length} saved markings? Your color groups will remain. This cannot be undone.`)) return;
+    setMarkings([]);
+    setSelectedColorId(null);
+    setMarkingMessage("All markings were deleted.");
+  };
 
   const openMarking = (marking: Marking) => {
     setDrawer(null);
@@ -610,6 +656,17 @@ export default function Home() {
                   {READER_FONTS.map((font) => <option value={font.id} key={font.id}>{font.name}</option>)}
                 </select>
               </label>
+              <label className="field">
+                <span>Reading width</span>
+                <select value={readingWidth} onChange={(event) => {
+                  const value = event.target.value === "full" ? "full" : "page";
+                  setReadingWidth(value);
+                  localStorage.setItem(READING_WIDTH, value);
+                }}>
+                  <option value="page">Page</option>
+                  <option value="full">Full screen width</option>
+                </select>
+              </label>
               {!dark ? <label className="field">
                 <span>Light appearance</span>
                 <select value={lightPalette} onChange={(event) => {
@@ -644,8 +701,12 @@ export default function Home() {
               to mark only that text.
             </p>
             <h2>Colors</h2>
-            <div className="color-manager">
-              {colors.map((color) => (
+            {colors.length > 8 ? <label className="color-search">
+              <span>Find a color group</span>
+              <input type="search" value={colorSearch} placeholder={`Search ${colors.length} groups`} onChange={(event) => setColorSearch(event.target.value)} />
+            </label> : null}
+            <div className="color-manager scalable">
+              {visibleColors.map((color) => (
                 <div className="color-row" key={color.id}>
                   <button
                     className={color.id === activeColorId ? "color-swatch active" : "color-swatch"}
@@ -682,10 +743,23 @@ export default function Home() {
               Add color
             </button>
 
+            <h2>Backup and reset</h2>
+            <div className="marking-actions">
+              <button type="button" onClick={exportMarkings} disabled={!markings.length}>Export</button>
+              <button type="button" onClick={() => importInput.current?.click()}>Import and merge</button>
+              <button className="danger-action" type="button" onClick={deleteAllMarkings} disabled={!markings.length}>Delete all</button>
+            </div>
+            <input ref={importInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importMarkings(file);
+              event.target.value = "";
+            }} />
+            {markingMessage ? <p className="marking-message" role="status">{markingMessage}</p> : null}
+
             <h2>{selectedColorId ? "Saved markings" : "Marking groups"}</h2>
             {!selectedColorId && markings.length ? (
               <div className="marking-groups">
-                {colors.map((color) => {
+                {visibleColors.map((color) => {
                   const count = markings.filter((marking) => marking.colorId === color.id).length;
                   return <button type="button" key={color.id} onClick={() => setSelectedColorId(color.id)}>
                     <span className="marking-dot" style={{ backgroundColor: color.value }} />
@@ -746,7 +820,7 @@ export default function Home() {
         ) : null}
       </aside>
 
-      <section className="reading-stage">
+      <section className="reading-stage" data-reading-width={readingWidth}>
         {error ? (
           <div className="state" role="alert">
             <strong>Unable to open this passage</strong>
@@ -783,8 +857,12 @@ export default function Home() {
             <header className="passage-line">
               <strong>{passage.name}</strong>
               <span>{translation?.abbreviation.toUpperCase()}</span>
-              <span>{verified ? "verified" : "saved"}</span>
+              <button className="verification-button" type="button" aria-expanded={verifiedInfo} onClick={() => setVerifiedInfo((current) => !current)}>{verified ? "verified" : "saved"}</button>
             </header>
+            {verifiedInfo ? <div className="verification-info" role="note">
+              {verified ? "Verified means this chapter’s hash is in sync with the CrossWire source modules used by the GetBible API." : "Saved means this chapter is being shown from your browser cache and could not currently be checked against the CrossWire source modules."}
+              <button type="button" aria-label="Close verification explanation" onClick={() => setVerifiedInfo(false)}>×</button>
+            </div> : null}
 
             <ol className="verses">
               {passage.verses.map((verse) => {

@@ -11,6 +11,8 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Pure black-and-white light and dark themes, adjustable scripture size, responsive layouts, RTL support, and accessible controls.
 - Persistent markings: click a verse number to mark a whole verse, or select a word or phrase to mark only that text.
 - Custom marking colors and category names, plus a searchable reading history in the Markings drawer.
+- Portable JSON backup and merge-import for markings, with duplicate prevention and safe bulk deletion.
+- Page-width and full-screen-width reading modes, selectable fonts, and light reading palettes.
 - Browser Cache Storage for fast repeat visits and offline fallback.
 - Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.
 - Translation, book, and chapter indexes refresh weekly. Changed upstream hashes invalidate only the affected cache branch.
@@ -62,6 +64,10 @@ The deployment script runs all tests, requires Wrangler authentication, and depl
 ## Cache behavior
 
 The application stores JSON responses in the browser Cache Storage API. Timestamps, SHA metadata, marking colors, and saved markings are stored in `localStorage`, so annotations remain private to the current browser and device. If the API is temporarily unavailable, a previously cached chapter remains readable and is marked as saved rather than verified. The reader includes a **Clear local cache** action.
+
+## Deployment marking groups
+
+Edit `config/reader.ts` to choose the initial marking names and colors for a deployment. Browser-customized color lists are preserved across deployments; the configured list is used for new installations or after local site data is cleared. The Markings drawer provides bounded scrolling and search when the configured list grows.
 
 ## License
 
