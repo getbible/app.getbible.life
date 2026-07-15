@@ -21,7 +21,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Page-width and full-screen-width reading modes, selectable fonts, edge-to-edge mobile reading, and touch-sized controls.
 - A glasses button opens the current chapter as Markdown with an H1 chapter heading, valid ordered-list verses, Copy and Download `.md` actions, and the translation’s full name plus copyright/license notice in the footer.
 - A muted desktop-only end-of-chapter footer links the current passage to `getbible.life` and displays the dynamically current Vast Development Method copyright year.
-- Deployment branding assets live in `public/`: the theme-aware footer logos and the 96×96 PNG favicon can be replaced without changing reader logic.
+- The browser favicon is the replaceable 96×96 `public/favicon.png` asset.
 - Translation-wide local search with all-word, any-word, phrase, partial/exact word, case, testament, and book filters. The whole translation is downloaded once, cached against its upstream hash, and searched with Unicode-aware segmentation.
 - Search results lock the underlying reader scroll and highlight every matching word using the active appearance palette.
 - Search is non-blocking and incremental: each edit restarts an ordered scan, the first 20 matches appear immediately, and further groups load as the result list is scrolled.

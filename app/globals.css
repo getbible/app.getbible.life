@@ -443,22 +443,11 @@ summary:focus-visible {
   font-size: 10px;
   line-height: 1.35;
 }
-.site-footer-logo {
-  display: block;
+.site-footer a {
   color: inherit;
-  opacity: 0.68;
   text-decoration: none;
-  transition: opacity 140ms ease;
 }
-.site-footer-logo:hover,
-.site-footer-logo:focus-visible { opacity: 1; }
-.site-footer-logo img {
-  display: block;
-  width: 215px;
-  max-width: 42vw;
-  height: auto;
-}
-:root[data-theme="dark"] .site-footer-logo img { filter: brightness(1.45); }
+.site-footer a:hover { color: var(--foreground); }
 
 .theme-button {
   min-width: 48px;
