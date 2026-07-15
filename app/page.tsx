@@ -40,7 +40,9 @@ import {
   translucentColor,
   wholeVerseMarking,
 } from "../lib/markings";
-import { EMPTY_BOUNDARY_SCROLL, registerBoundaryScroll } from "../lib/scroll-navigation";
+import { DAILY_SCRIPTURE_URL, dailyIsCurrent, parseDailyReference } from "../lib/daily";
+import { type VerseNote, compareNotes, mergeNotes, noteKey } from "../lib/notes";
+import { boundaryTurn, readerStorageKeys } from "../lib/reader-state";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -51,9 +53,13 @@ const ACTIVE_COLOR = "getbible-reader:active-color:v1";
 const READER_FONT = "getbible-reader:font:v1";
 const LIGHT_PALETTE = "getbible-reader:light-palette:v1";
 const READING_WIDTH = "getbible-reader:reading-width:v1";
+const NOTES = "getbible-reader:notes:v1";
+const LAST_READING = "getbible-reader:last-reading:v1";
+const DAILY_CACHE = "getbible-reader:daily:v1";
 const INITIAL_PASSAGE: Passage = { translation: "kjv", book: 43, chapter: 3 };
 
 type Drawer = "reader" | "markings" | null;
+type StudyTab = "markings" | "notes";
 
 interface TextSelection {
   verse: number;
@@ -140,17 +146,29 @@ export default function Home() {
   const [colorSearch, setColorSearch] = useState("");
   const [verifiedInfo, setVerifiedInfo] = useState(false);
   const [markingMessage, setMarkingMessage] = useState("");
+  const [notes, setNotes] = useState<VerseNote[]>([]);
+  const [studyTab, setStudyTab] = useState<StudyTab>("markings");
+  const [noteEditor, setNoteEditor] = useState<{ verse: number; reference: string; text: string } | null>(null);
+  const [needsDaily, setNeedsDaily] = useState(false);
   const [pendingVerse, setPendingVerse] = useState<number | null>(null);
   const requestId = useRef(0);
   const touchStart = useRef<number | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
-  const boundaryScroll = useRef(EMPTY_BOUNDARY_SCROLL);
+  const boundaryLock = useRef(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
       let next = parsePassage(window.location.search);
       if (!window.location.search) {
-        next = storedValue<Passage>(LAST_PASSAGE, INITIAL_PASSAGE);
+        const savedReading = storedValue<{ passage: Passage; verse: number } | null>(LAST_READING, null);
+        if (savedReading) {
+          next = savedReading.passage;
+          setPendingVerse(savedReading.verse);
+        } else if (localStorage.getItem(LAST_PASSAGE)) {
+          next = storedValue<Passage>(LAST_PASSAGE, INITIAL_PASSAGE);
+        } else {
+          setNeedsDaily(true);
+        }
       }
 
       const storedColors = storedValue<MarkingColor[]>(
@@ -166,6 +184,7 @@ export default function Home() {
         Math.min(28, Math.max(16, Number(localStorage.getItem(TEXT_SIZE)) || 20)),
       );
       setMarkings(storedValue<Marking[]>(MARKINGS, []));
+      setNotes(storedValue<VerseNote[]>(NOTES, []));
       const savedFont = localStorage.getItem(READER_FONT) ?? "serif";
       const savedPalette = localStorage.getItem(LIGHT_PALETTE) ?? "white";
       setReaderFont(READER_FONTS.some((font) => font.id === savedFont) ? savedFont : "serif");
@@ -180,6 +199,7 @@ export default function Home() {
       );
       setMarkingsReady(true);
       setReady(true);
+      void navigator.storage?.persist?.();
     }, 0);
 
     const popState = () => setRoute(parsePassage(window.location.search));
@@ -197,6 +217,11 @@ export default function Home() {
 
   useEffect(() => {
     if (!markingsReady) return;
+    localStorage.setItem(NOTES, JSON.stringify(notes));
+  }, [markingsReady, notes]);
+
+  useEffect(() => {
+    if (!markingsReady) return;
     localStorage.setItem(MARKING_COLORS, JSON.stringify(colors));
     localStorage.setItem(ACTIVE_COLOR, activeColorId);
   }, [activeColorId, colors, markingsReady]);
@@ -210,6 +235,38 @@ export default function Home() {
     localStorage.setItem(LAST_PASSAGE, JSON.stringify(next));
     setRoute(next);
   }, []);
+
+  const openDailyVerse = useCallback(async () => {
+    try {
+      let daily = storedValue<unknown | null>(DAILY_CACHE, null);
+      let parsed = daily ? parseDailyReference(daily) : null;
+      if (!parsed || !dailyIsCurrent(parsed.date)) {
+        const response = await fetch(DAILY_SCRIPTURE_URL, { cache: "no-store" });
+        if (!response.ok) throw new Error("Today’s Scripture could not be loaded.");
+        daily = await response.json();
+        parsed = parseDailyReference(daily);
+        localStorage.setItem(DAILY_CACHE, JSON.stringify(daily));
+      }
+      const allBooks = valuesByNumber((await loadBooks(parsed.translation)).data);
+      const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
+      const book = allBooks.find((item) => normalize(item.name) === normalize(parsed.bookName));
+      if (!book) throw new Error(`The daily Scripture book “${parsed.bookName}” is unavailable.`);
+      setPendingVerse(parsed.verse);
+      go({ translation: parsed.translation, book: book.nr, chapter: parsed.chapter });
+      setDrawer(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Today’s Scripture could not be opened.");
+    }
+  }, [go]);
+
+  useEffect(() => {
+    if (!ready || !needsDaily) return;
+    const timer = window.setTimeout(() => {
+      setNeedsDaily(false);
+      void openDailyVerse();
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [needsDaily, openDailyVerse, ready]);
 
   useEffect(() => {
     if (!ready) return;
@@ -301,6 +358,26 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [passage, pendingVerse]);
 
+  useEffect(() => {
+    if (!passage) return;
+    let timer = 0;
+    const remember = () => {
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        const verses = [...document.querySelectorAll<HTMLElement>(".verses > li")];
+        const visible = verses.find((element) => element.getBoundingClientRect().bottom > 58) ?? verses.at(-1);
+        const verse = Number(visible?.id.replace("v", "")) || 1;
+        localStorage.setItem(LAST_READING, JSON.stringify({ passage: route, verse }));
+      }, 180);
+    };
+    remember();
+    window.addEventListener("scroll", remember, { passive: true });
+    return () => {
+      window.clearTimeout(timer);
+      window.removeEventListener("scroll", remember);
+    };
+  }, [passage, route]);
+
   const turn = useCallback(
     async (delta: -1 | 1) => {
       if (!passage) return;
@@ -342,24 +419,17 @@ export default function Home() {
   }, [turn]);
 
   useEffect(() => {
-    boundaryScroll.current = EMPTY_BOUNDARY_SCROLL;
+    boundaryLock.current = false;
     if (drawer || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
-      const direction = event.deltaY > 0 ? 1 : -1;
       const root = document.documentElement;
-      const atBoundary = direction === 1
-        ? window.innerHeight + window.scrollY >= root.scrollHeight - 2
-        : window.scrollY <= 1;
-      const result = registerBoundaryScroll(
-        boundaryScroll.current,
-        direction,
-        atBoundary,
-        Date.now(),
-      );
-      boundaryScroll.current = result.state;
-      if (result.navigate) void turn(direction);
+      const direction = boundaryTurn(event.deltaY, window.scrollY, window.innerHeight, root.scrollHeight);
+      if (direction && !boundaryLock.current) {
+        boundaryLock.current = true;
+        void turn(direction);
+      }
     };
 
     window.addEventListener("wheel", wheel, { passive: true });
@@ -374,6 +444,7 @@ export default function Home() {
     () => new Map(colors.map((color) => [color.id, color])),
     [colors],
   );
+  const sortedNotes = useMemo(() => [...notes].sort(compareNotes), [notes]);
 
   const chapterIndex = chapters.findIndex((item) => item.chapter === route.chapter);
   const bookIndex = books.findIndex((item) => item.nr === route.book);
@@ -492,14 +563,14 @@ export default function Home() {
   }, [colorSearch, colors]);
 
   const exportMarkings = () => {
-    const backup = { version: 1, exportedAt: new Date().toISOString(), colors, markings } as const;
+    const backup = { version: 2, exportedAt: new Date().toISOString(), colors, markings, notes } as const;
     const url = URL.createObjectURL(new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" }));
     const link = document.createElement("a");
     link.href = url;
     link.download = `getBible-Life-markings-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    setMarkingMessage(`Exported ${markings.length} marking${markings.length === 1 ? "" : "s"}.`);
+    setMarkingMessage(`Exported ${markings.length} marking${markings.length === 1 ? "" : "s"} and ${notes.length} note${notes.length === 1 ? "" : "s"}.`);
   };
 
   const importMarkings = async (file: File) => {
@@ -510,10 +581,56 @@ export default function Home() {
       const nextMarkings = mergeMarkings(markings, backup.markings).filter((marking) => nextColors.some((color) => color.id === marking.colorId));
       setColors(nextColors);
       setMarkings(nextMarkings);
-      setMarkingMessage(`Imported ${nextMarkings.length - previousCount} new marking${nextMarkings.length - previousCount === 1 ? "" : "s"}; existing markings were kept.`);
+      const previousNotes = notes.length;
+      const nextNotes = mergeNotes(notes, backup.notes ?? []);
+      setNotes(nextNotes);
+      setMarkingMessage(`Imported ${nextMarkings.length - previousCount} new marking${nextMarkings.length - previousCount === 1 ? "" : "s"} and ${nextNotes.length - previousNotes} note${nextNotes.length - previousNotes === 1 ? "" : "s"}; existing data was kept.`);
     } catch (caught) {
       setMarkingMessage(caught instanceof Error ? caught.message : "The markings backup could not be imported.");
     }
+  };
+
+  const openNote = (verse: number, reference: string) => {
+    const existing = notes.find((note) => noteKey(note) === noteKey({ passage: route, verse }));
+    setNoteEditor({ verse, reference, text: existing?.text ?? "" });
+  };
+
+  const saveNote = () => {
+    if (!noteEditor?.text.trim()) return;
+    const now = Date.now();
+    setNotes((current) => {
+      const key = noteKey({ passage: route, verse: noteEditor.verse });
+      const existing = current.find((note) => noteKey(note) === key);
+      const note: VerseNote = {
+        id: existing?.id ?? identifier(),
+        passage: route,
+        verse: noteEditor.verse,
+        reference: noteEditor.reference,
+        text: noteEditor.text.trim(),
+        createdAt: existing?.createdAt ?? now,
+        updatedAt: now,
+      };
+      return [...current.filter((item) => noteKey(item) !== key), note];
+    });
+    setNoteEditor(null);
+  };
+
+  const openSavedNote = (note: VerseNote) => {
+    setDrawer(null);
+    setPendingVerse(note.verse);
+    if (noteKey(note).split("/").slice(0, 3).join("/") !== `${route.translation}/${route.book}/${route.chapter}`) go(note.passage);
+  };
+
+  const clearAllLocalData = async () => {
+    if (!window.confirm("Clear all local getBible.Life data? This permanently removes your markings, notes, colors, reading position, settings, and cached Bible chapters from this browser.")) return;
+    await clearCache();
+    readerStorageKeys(Object.keys(localStorage)).forEach((key) => localStorage.removeItem(key));
+    setMarkings([]);
+    setNotes([]);
+    setColors(DEFAULT_MARKING_COLORS);
+    setActiveColorId(DEFAULT_MARKING_COLORS[0].id);
+    setDrawer(null);
+    setNeedsDaily(true);
   };
 
   const deleteAllMarkings = () => {
@@ -543,7 +660,7 @@ export default function Home() {
           <span />
           <span />
         </button>
-        <span className="brand">getBible.Life</span>
+        <button className="brand" type="button" title="Open today’s Scripture" onClick={() => void openDailyVerse()}>getBible.Life</button>
         <span className="top-reference">{passage?.name ?? "Opening Bible"}</span>
         <nav className="compact-navigation" aria-label="Chapter navigation">
           <button
@@ -569,7 +686,7 @@ export default function Home() {
           aria-expanded={drawer === "markings"}
           onClick={() => setDrawer(drawer === "markings" ? null : "markings")}
         >
-          Markings{markings.length ? ` ${markings.length}` : ""}
+          Study{markings.length + notes.length ? ` ${markings.length + notes.length}` : ""}
         </button>
         <button className="theme-button" type="button" onClick={changeTheme}>
           {dark ? "Light" : "Dark"}
@@ -586,7 +703,7 @@ export default function Home() {
 
       <aside className={`drawer ${drawer ? "visible" : ""}`} aria-hidden={!drawer}>
         <div className="drawer-header">
-          <strong>{drawer === "markings" ? "Markings" : "Choose passage"}</strong>
+          <strong>{drawer === "markings" ? "Study" : "Choose passage"}</strong>
           <button type="button" aria-label="Close menu" onClick={() => setDrawer(null)}>
             ‹
           </button>
@@ -710,12 +827,9 @@ export default function Home() {
               <button
                 className="plain-action"
                 type="button"
-                onClick={async () => {
-                  await clearCache();
-                  setRoute({ ...route });
-                }}
+                onClick={() => void clearAllLocalData()}
               >
-                Clear local Bible cache
+                Clear all local data
               </button>
             </details>
           </div>
@@ -724,9 +838,18 @@ export default function Home() {
         {drawer === "markings" ? (
           <div className="drawer-content markings-panel">
             <p className="drawer-help">
-              Click a verse number to mark the whole verse. Select any word or phrase
-              to mark only that text.
+              Keep long-term markings and verse notes in this browser.
             </p>
+            <div className="study-tabs" role="tablist" aria-label="Study tools">
+              <button type="button" role="tab" aria-selected={studyTab === "markings"} onClick={() => setStudyTab("markings")}>Markings <span>{markings.length}</span></button>
+              <button type="button" role="tab" aria-selected={studyTab === "notes"} onClick={() => setStudyTab("notes")}>Notes <span>{notes.length}</span></button>
+            </div>
+            <input ref={importInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => {
+              const file = event.target.files?.[0];
+              if (file) void importMarkings(file);
+              event.target.value = "";
+            }} />
+            {studyTab === "markings" ? <>
             <h2>Colors</h2>
             {colors.length > 8 ? <label className="color-search">
               <span>Find a color group</span>
@@ -834,17 +957,41 @@ export default function Home() {
             <section className="backup-section">
               <h2>Backup and reset</h2>
               <div className="marking-actions">
-                <button type="button" onClick={exportMarkings} disabled={!markings.length}>Export</button>
+                <button type="button" onClick={exportMarkings} disabled={!markings.length && !notes.length}>Export</button>
                 <button type="button" onClick={() => importInput.current?.click()}>Import and merge</button>
                 <button className="danger-action" type="button" onClick={deleteAllMarkings} disabled={!markings.length}>Delete all</button>
               </div>
-              <input ref={importInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => {
-                const file = event.target.files?.[0];
-                if (file) void importMarkings(file);
-                event.target.value = "";
-              }} />
               {markingMessage ? <p className="marking-message" role="status">{markingMessage}</p> : null}
             </section>
+            </> : <>
+              <h2>Verse notes</h2>
+              {sortedNotes.length ? <ul className="note-list">
+                {sortedNotes.map((note) => <li key={note.id}>
+                  <button type="button" className="note-link" onClick={() => openSavedNote(note)}>
+                    <strong>{note.reference}</strong>
+                    <span>{note.text}</span>
+                  </button>
+                  <button type="button" className="edit-note" aria-label={`Edit note for ${note.reference}`} onClick={() => {
+                    setDrawer(null);
+                    setPendingVerse(note.verse);
+                    if (noteKey(note).split("/").slice(0, 3).join("/") !== `${route.translation}/${route.book}/${route.chapter}`) go(note.passage);
+                    window.setTimeout(() => setNoteEditor({ verse: note.verse, reference: note.reference, text: note.text }), 100);
+                  }}>Edit</button>
+                  <button type="button" className="delete-marking" aria-label={`Delete note for ${note.reference}`} onClick={() => {
+                    if (window.confirm(`Delete the note for ${note.reference}?`)) setNotes((current) => current.filter((item) => item.id !== note.id));
+                  }}>×</button>
+                </li>)}
+              </ul> : <p className="empty-markings">No verse notes yet. Use “Note” beside any verse to add one.</p>}
+
+              <section className="backup-section">
+                <h2>Backup and reset</h2>
+                <div className="marking-actions">
+                  <button type="button" onClick={exportMarkings} disabled={!markings.length && !notes.length}>Export</button>
+                  <button type="button" onClick={() => importInput.current?.click()}>Import and merge</button>
+                </div>
+                {markingMessage ? <p className="marking-message" role="status">{markingMessage}</p> : null}
+              </section>
+            </>}
           </div>
         ) : null}
       </aside>
@@ -903,6 +1050,7 @@ export default function Home() {
                   ? colorMap.get(wholeMarking.colorId)
                   : null;
                 const reference = `${passage.book_name} ${passage.chapter}:${verse.verse}`;
+                const verseNote = notes.find((note) => noteKey(note) === noteKey({ passage: route, verse: verse.verse }));
 
                 return (
                   <li
@@ -951,6 +1099,7 @@ export default function Home() {
                         );
                       })}
                     </span>
+                    <button className={verseNote ? "note-button has-note" : "note-button"} type="button" aria-label={`${verseNote ? "Edit" : "Add"} note for ${reference}`} onClick={() => openNote(verse.verse, reference)}>{verseNote ? "Note" : "+ Note"}</button>
                   </li>
                 );
               })}
@@ -998,6 +1147,22 @@ export default function Home() {
           </div>
         </div>
       ) : null}
+
+      {noteEditor ? <div className="note-editor" role="dialog" aria-modal="true" aria-label={`Note for ${noteEditor.reference}`}>
+        <div className="note-editor-header"><strong>{noteEditor.reference}</strong><button type="button" aria-label="Close note editor" onClick={() => setNoteEditor(null)}>×</button></div>
+        <textarea autoFocus value={noteEditor.text} placeholder="Write your note…" onChange={(event) => setNoteEditor({ ...noteEditor, text: event.target.value })} />
+        <div className="note-editor-actions">
+          {notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: noteEditor.verse })) ? <button className="delete-note" type="button" onClick={() => {
+            if (window.confirm(`Delete the note for ${noteEditor.reference}?`)) {
+              const key = noteKey({ passage: route, verse: noteEditor.verse });
+              setNotes((current) => current.filter((note) => noteKey(note) !== key));
+              setNoteEditor(null);
+            }
+          }}>Delete</button> : null}
+          <button type="button" onClick={() => setNoteEditor(null)}>Cancel</button>
+          <button className="save-note" type="button" disabled={!noteEditor.text.trim()} onClick={saveNote}>Save note</button>
+        </div>
+      </div> : null}
 
       <nav className="mobile-navigation" aria-label="Chapter navigation">
         <button type="button" disabled={!canGoPrevious} onClick={() => void turn(-1)}>

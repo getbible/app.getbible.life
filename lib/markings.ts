@@ -1,4 +1,5 @@
 import type { Passage } from "./getbible";
+import type { VerseNote } from "./notes";
 import { DEPLOYMENT_MARKING_COLORS } from "../config/reader.ts";
 
 export interface MarkingColor {
@@ -39,10 +40,11 @@ export function compareMarkings(left: Marking, right: Marking): number {
 export const DEFAULT_MARKING_COLORS: MarkingColor[] = DEPLOYMENT_MARKING_COLORS;
 
 export interface MarkingsBackup {
-  version: 1;
+  version: 1 | 2;
   exportedAt: string;
   colors: MarkingColor[];
   markings: Marking[];
+  notes?: VerseNote[];
 }
 
 export function markingIdentity(marking: Marking): string {
@@ -82,12 +84,13 @@ export function mergeColors(current: MarkingColor[], imported: MarkingColor[]): 
 export function parseMarkingsBackup(value: unknown): MarkingsBackup {
   if (!value || typeof value !== "object") throw new Error("This is not a getBible.Life markings backup.");
   const backup = value as Partial<MarkingsBackup>;
-  if (backup.version !== 1 || !Array.isArray(backup.colors) || !Array.isArray(backup.markings)) {
+  if ((backup.version !== 1 && backup.version !== 2) || !Array.isArray(backup.colors) || !Array.isArray(backup.markings)) {
     throw new Error("This markings backup has an unsupported format.");
   }
   const colorsValid = backup.colors.every((color) => color && typeof color.id === "string" && typeof color.name === "string" && /^#[0-9a-f]{6}$/i.test(color.value));
   const markingsValid = backup.markings.every((marking) => marking && typeof marking.id === "string" && typeof marking.colorId === "string" && typeof marking.verse === "number" && typeof marking.quote === "string" && typeof marking.createdAt === "number" && marking.passage && typeof marking.passage.translation === "string" && typeof marking.passage.book === "number" && typeof marking.passage.chapter === "number");
-  if (!colorsValid || !markingsValid) throw new Error("This markings backup contains invalid data.");
+  const notesValid = backup.notes === undefined || (Array.isArray(backup.notes) && backup.notes.every((note) => note && typeof note.id === "string" && typeof note.text === "string" && typeof note.verse === "number" && typeof note.reference === "string" && typeof note.createdAt === "number" && typeof note.updatedAt === "number" && note.passage && typeof note.passage.translation === "string" && typeof note.passage.book === "number" && typeof note.passage.chapter === "number"));
+  if (!colorsValid || !markingsValid || !notesValid) throw new Error("This markings backup contains invalid data.");
   return backup as MarkingsBackup;
 }
 

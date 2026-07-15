@@ -7,12 +7,15 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Every translation, language, book, chapter, and verse is discovered from the API; no Bible structure is hard-coded.
 - Shareable URLs and browser back/forward navigation.
 - Previous/next paging across book boundaries, `Alt` + arrow keyboard navigation, and mobile swipe navigation.
-- Deliberate edge scrolling: a second distinct downward scroll at the bottom opens the next chapter, while the same gesture at the top opens the previous chapter.
+- Continuous reading: scrolling beyond the bottom opens the next chapter, while scrolling beyond the top opens the previous chapter.
 - Minimal full-page reading with a compact header and collapsible passage navigation.
 - Pure black-and-white light and dark themes, adjustable scripture size, responsive layouts, RTL support, and accessible controls.
 - Persistent markings: click a verse number to mark a whole verse, or select a word or phrase to mark only that text.
 - Custom marking colors and category names, plus a searchable reading history in the Markings drawer.
 - Portable JSON backup and merge-import for markings, with duplicate prevention and safe bulk deletion.
+- Long-term verse notes with Bible-order navigation; backups include notes, markings, and custom color groups.
+- The visible reading position is remembered down to the verse and restored on the next visit.
+- First-time readers open at the daily Scripture; clicking `getBible.Life` returns to that day’s cached verse.
 - Page-width and full-screen-width reading modes, selectable fonts, and light reading palettes.
 - Browser Cache Storage for fast repeat visits and offline fallback.
 - Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.
@@ -64,7 +67,7 @@ The deployment script runs all tests, requires Wrangler authentication, and depl
 
 ## Cache behavior
 
-The application stores JSON responses in the browser Cache Storage API. Timestamps, SHA metadata, marking colors, and saved markings are stored in `localStorage`, so annotations remain private to the current browser and device. If the API is temporarily unavailable, a previously cached chapter remains readable and is marked as saved rather than verified. The reader includes a **Clear local cache** action.
+The application stores JSON responses in the browser Cache Storage API. Timestamps, SHA metadata, marking colors, saved markings, verse notes, daily Scripture, and the last visible verse are stored in durable browser storage, so annotations remain private to the current browser and device. The app requests persistent-storage protection when the browser supports it. If the API is temporarily unavailable, a previously cached chapter remains readable and is marked as saved rather than verified. **Clear all local data** requires confirmation and removes every locally stored reader item.
 
 ## Deployment marking groups
 

@@ -2,7 +2,9 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { WEEK_MS, fresh, parsePassage, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking } from "../lib/markings.ts";
-import { EMPTY_BOUNDARY_SCROLL, registerBoundaryScroll } from "../lib/scroll-navigation.ts";
+import { dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
+import { compareNotes, mergeNotes, noteKey } from "../lib/notes.ts";
+import { boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -98,23 +100,38 @@ test("validates portable markings backups", () => {
     markings: [{ id: "one", passage: { translation: "kjv", book: 1, chapter: 1 }, verse: 1, start: null, end: null, quote: "In the beginning", colorId: "yellow", createdAt: 1 }],
   };
   assert.deepEqual(parseMarkingsBackup(backup), backup);
-  assert.throws(() => parseMarkingsBackup({ version: 2, colors: [], markings: [] }), /unsupported format/);
+  assert.throws(() => parseMarkingsBackup({ version: 3, colors: [], markings: [] }), /unsupported format/);
   assert.throws(() => parseMarkingsBackup({ version: 1, colors: [{ id: "x", name: "Bad", value: "red" }], markings: [] }), /invalid data/);
 });
 
-test("requires two separate boundary scroll gestures before changing chapters", () => {
-  const first = registerBoundaryScroll(EMPTY_BOUNDARY_SCROLL, 1, true, 1_000);
-  assert.equal(first.navigate, false);
-  const continuous = registerBoundaryScroll(first.state, 1, true, 1_100);
-  assert.equal(continuous.navigate, false);
-  const second = registerBoundaryScroll(continuous.state, 1, true, 1_350);
-  assert.equal(second.navigate, true);
-  assert.deepEqual(second.state, EMPTY_BOUNDARY_SCROLL);
+test("parses and date-checks daily Scripture responses", () => {
+  const daily = parseDailyReference({
+    date: "Wednesday 15-July, 2026",
+    getbible: "https://getbible.life/kjv/John/3/16",
+  });
+  assert.deepEqual(daily, { date: "Wednesday 15-July, 2026", translation: "kjv", bookName: "John", chapter: 3, verse: 16 });
+  assert.equal(dailyDateKey(daily.date), "2026-07-15");
+  assert.equal(dailyIsCurrent(daily.date, new Date(2026, 6, 15, 12)), true);
+  assert.equal(dailyIsCurrent(daily.date, new Date(2026, 6, 16, 12)), false);
 });
 
-test("resets boundary scrolling after leaving the edge, reversing, or waiting", () => {
-  const first = registerBoundaryScroll(EMPTY_BOUNDARY_SCROLL, -1, true, 1_000);
-  assert.equal(registerBoundaryScroll(first.state, 1, true, 1_300).navigate, false);
-  assert.deepEqual(registerBoundaryScroll(first.state, -1, false, 1_300).state, EMPTY_BOUNDARY_SCROLL);
-  assert.equal(registerBoundaryScroll(first.state, -1, true, 2_500).navigate, false);
+test("merges verse notes by reference and keeps the newest edit", () => {
+  const passage = { translation: "kjv", book: 43, chapter: 3 };
+  const old = { id: "one", passage, verse: 16, reference: "John 3:16", text: "Old", createdAt: 1, updatedAt: 2 };
+  const fresh = { ...old, id: "two", text: "Fresh", updatedAt: 3 };
+  const other = { ...old, id: "three", verse: 17, reference: "John 3:17" };
+  const merged = mergeNotes([old], [fresh, other]).sort(compareNotes);
+  assert.equal(noteKey(old), "kjv/43/3/16");
+  assert.deepEqual(merged.map((note) => note.text), ["Fresh", "Old"]);
+});
+
+test("changes chapters only when scrolling outward at a reading boundary", () => {
+  assert.equal(boundaryTurn(100, 1_200, 800, 2_000), 1);
+  assert.equal(boundaryTurn(-100, 0, 800, 2_000), -1);
+  assert.equal(boundaryTurn(100, 500, 800, 2_000), 0);
+  assert.equal(boundaryTurn(-100, 500, 800, 2_000), 0);
+});
+
+test("clears only getBible.Life reader storage keys", () => {
+  assert.deepEqual(readerStorageKeys(["unrelated", "getbible-reader:notes:v1", "getbible-reader:last:v1"]), ["getbible-reader:notes:v1", "getbible-reader:last:v1"]);
 });

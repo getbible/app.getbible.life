@@ -130,7 +130,11 @@ summary:focus-visible {
 }
 
 .brand {
+  padding: 0;
+  border: 0;
+  background: transparent;
   color: var(--foreground);
+  cursor: pointer;
   font-size: 15px;
   font-weight: 760;
   letter-spacing: -0.025em;
@@ -227,7 +231,83 @@ summary:focus-visible {
 }
 
 .drawer:has(.markings-panel) {
-  width: min(620px, calc(100vw - 36px));
+  width: min(50vw, calc(100vw - 36px));
+}
+
+.study-tabs {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  margin: 15px 0 20px;
+  border-bottom: 1px solid var(--border);
+}
+
+.study-tabs button {
+  padding: 9px;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.study-tabs button[aria-selected="true"] {
+  border-bottom-color: var(--foreground);
+  color: var(--foreground);
+}
+
+.study-tabs span {
+  margin-inline-start: 4px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.note-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.note-list li {
+  display: grid;
+  grid-template-columns: 1fr auto 28px;
+  align-items: center;
+  gap: 7px;
+  border-top: 1px solid var(--border);
+}
+
+.note-link {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 4px;
+  padding: 12px 0;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  text-align: left;
+}
+
+.note-link strong { font-size: 11px; }
+.note-link span {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: Georgia, "Times New Roman", serif;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.edit-note {
+  padding: 0;
+  border: 0;
+  border-bottom: 1px solid currentColor;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 9px;
 }
 
 .drawer.visible {
@@ -781,6 +861,22 @@ summary:focus-visible {
   cursor: text;
 }
 
+.note-button {
+  margin-inline-start: 0.7em;
+  padding: 1px 4px;
+  border: 0;
+  border-bottom: 1px dotted var(--muted);
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-family: var(--font-geist-sans), Arial, sans-serif;
+  font-size: 0.42em;
+  font-weight: 700;
+  vertical-align: 0.45em;
+}
+
+.note-button.has-note { color: var(--foreground); }
+
 .verse-text mark {
   padding: 0 0.04em;
   border-radius: 2px;
@@ -861,6 +957,68 @@ summary:focus-visible {
   transform: translateX(-50%);
 }
 
+.note-editor {
+  position: fixed;
+  z-index: 70;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  width: min(560px, calc(100vw - 30px));
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px;
+  border: 1px solid var(--foreground);
+  border-radius: 7px;
+  background: var(--background);
+  color: var(--foreground);
+  box-shadow: 0 18px 70px rgb(0 0 0 / 30%);
+  transform: translate(-50%, -50%);
+}
+
+.note-editor-header,
+.note-editor-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.note-editor-header strong { font-size: 12px; }
+.note-editor-header button {
+  margin-inline-start: auto;
+  border: 0;
+  background: transparent;
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 18px;
+}
+
+.note-editor textarea {
+  width: 100%;
+  min-height: 170px;
+  resize: vertical;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  font: 14px/1.5 var(--font-geist-sans), Arial, sans-serif;
+}
+
+.note-editor-actions { justify-content: flex-end; }
+.note-editor-actions button {
+  height: 32px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 10px;
+}
+.note-editor-actions .delete-note { margin-inline-end: auto; color: #b42318; }
+.note-editor-actions .save-note { border-color: var(--foreground); background: var(--foreground); color: var(--background); }
+.note-editor-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
+
 .selection-toolbar > span {
   overflow: hidden;
   max-width: 260px;
@@ -901,6 +1059,7 @@ summary:focus-visible {
 }
 
 @media (max-width: 720px) {
+  .drawer:has(.markings-panel) { width: calc(100vw - 36px); }
   .topbar {
     grid-template-columns: 32px auto minmax(20px, 1fr) auto auto;
     gap: 7px;
@@ -1006,7 +1165,7 @@ summary:focus-visible {
   }
 
   .markings-button::after {
-    content: "Marks";
+    content: "Study";
     font-size: 10px;
   }
 }
