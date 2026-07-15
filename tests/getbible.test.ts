@@ -6,7 +6,7 @@ import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference 
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
 import { boundaryIntent, boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance.ts";
-import { flattenTranslation, highlightSearchText, searchVerses } from "../lib/search.ts";
+import { flattenTranslation, highlightSearchText, searchVersePage, searchVersePageAsync, searchVerses } from "../lib/search.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -189,6 +189,24 @@ test("highlights every matching result word without losing punctuation", () => {
   assert.deepEqual(partial.filter((part) => part.highlighted).map((part) => part.text), ["cat", "cats", "CAT"]);
   const exact = highlightSearchText("woman and women", "woman", { match: "exact", caseSensitive: false, locale: "en" });
   assert.deepEqual(exact.filter((part) => part.highlighted).map((part) => part.text), ["woman"]);
+});
+
+test("returns search results in ordered batches and resumes from its cursor", async () => {
+  const corpus = Array.from({ length: 55 }, (_, index) => ({
+    book: index < 30 ? 1 : 40,
+    bookName: index < 30 ? "Genesis" : "Matthew",
+    chapter: 1,
+    verse: index + 1,
+    reference: `${index < 30 ? "Genesis" : "Matthew"} 1:${index + 1}`,
+    text: `King ${index}`,
+  }));
+  const options = { words: "all" as const, match: "exact" as const, caseSensitive: false, scope: "all" as const, locale: "en" };
+  const first = searchVersePage(corpus, "king", options, 0, 20);
+  assert.equal(first.results.length, 20);
+  assert.equal(first.results[0].reference, "Genesis 1:1");
+  const second = await searchVersePageAsync(corpus, "king", options, first.nextCursor, 20);
+  assert.equal(second.results.length, 20);
+  assert.equal(second.results[0].reference, "Genesis 1:21");
 });
 
 test("clears only getBible.Life reader storage keys", () => {

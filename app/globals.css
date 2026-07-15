@@ -112,7 +112,7 @@ summary:focus-visible {
   z-index: 40;
   top: 0;
   display: grid;
-  grid-template-columns: 34px auto minmax(130px, 320px) minmax(60px, 1fr) auto auto auto;
+  grid-template-columns: 34px auto minmax(180px, 520px) minmax(40px, 1fr) auto auto auto;
   align-items: center;
   gap: 12px;
   height: 48px;
@@ -135,7 +135,7 @@ summary:focus-visible {
 
 .header-search input {
   width: 100%;
-  height: 30px;
+  height: 34px;
   padding: 0 10px;
   border: 1px solid var(--border);
   border-radius: 5px;
@@ -153,7 +153,7 @@ summary:focus-visible {
   left: 50%;
   display: flex;
   overflow: hidden;
-  width: min(920px, calc(100vw - 24px));
+  width: min(1280px, calc(100vw - 12px));
   max-height: calc(100vh - 60px);
   flex-direction: column;
   border: 1px solid var(--border);
@@ -163,6 +163,24 @@ summary:focus-visible {
   box-shadow: 0 24px 70px rgb(0 0 0 / 28%);
   transform: translateX(-50%);
 }
+
+.search-query {
+  display: block;
+  padding: 0 16px 12px;
+}
+
+.search-query input {
+  width: 100%;
+  height: 44px;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 6px 6px 0 0;
+  background: var(--subtle);
+  color: var(--foreground);
+  font-size: 15px;
+}
+
+.search-query input::placeholder { color: var(--muted); opacity: 1; }
 
 .search-heading {
   display: flex;
@@ -248,6 +266,23 @@ summary:focus-visible {
 .search-initializing i {
   width: 24px;
   height: 24px;
+  border: 2px solid var(--border);
+  border-top-color: var(--foreground);
+  border-radius: 50%;
+  animation: search-spin 700ms linear infinite;
+}
+.search-more {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 42px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.search-more i {
+  width: 14px;
+  height: 14px;
   border: 2px solid var(--border);
   border-top-color: var(--foreground);
   border-radius: 50%;

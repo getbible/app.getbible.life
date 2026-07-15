@@ -20,6 +20,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Page-width and full-screen-width reading modes, selectable fonts, edge-to-edge mobile reading, and touch-sized controls.
 - Translation-wide local search with all-word, any-word, phrase, partial/exact word, case, testament, and book filters. The whole translation is downloaded once, cached against its upstream hash, and searched with Unicode-aware segmentation.
 - Search results lock the underlying reader scroll and highlight every matching word using the active appearance palette.
+- Search is non-blocking and incremental: each edit restarts an ordered scan, the first 20 matches appear immediately, and further groups load as the result list is scrolled.
 - Appearance can follow the operating system automatically or be switched manually; the selected light and dark palettes are preserved independently.
 - Browser Cache Storage for fast repeat visits and offline fallback.
 - Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.

@@ -46,7 +46,7 @@ import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyRef
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance";
-import { flattenTranslation, highlightSearchText, searchVerses, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
+import { flattenTranslation, highlightSearchText, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -162,8 +162,13 @@ export default function Home() {
   const [searchCorpusKey, setSearchCorpusKey] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
+  const [searchResults, setSearchResults] = useState<SearchVerse[]>([]);
+  const [searchCursor, setSearchCursor] = useState(0);
+  const [searchComplete, setSearchComplete] = useState(true);
+  const [searchRunning, setSearchRunning] = useState(false);
   const requestId = useRef(0);
   const searchRequestId = useRef(0);
+  const searchScanId = useRef(0);
   const touchStart = useRef<{ x: number; y: number; boundary: -1 | 0 | 1 } | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const boundaryLock = useRef(false);
@@ -515,14 +520,61 @@ export default function Home() {
     return () => window.clearTimeout(timer);
   }, [searchCorpusKey, searchOpen, searchQuery, translation]);
 
-  const searchResults = useMemo(() => searchVerses(searchCorpus, searchQuery, {
-    words: searchWords,
-    match: searchMatch,
-    caseSensitive: searchCaseSensitive,
-    scope: searchScope,
-    locale: translation?.lang,
-  }), [searchCaseSensitive, searchCorpus, searchMatch, searchQuery, searchScope, searchWords, translation?.lang]);
   const searchNeedsInitialization = Boolean(searchQuery.trim() && translation && searchCorpusKey !== `${translation.abbreviation}:${translation.sha}`);
+
+  useEffect(() => {
+    if (!searchQuery.trim() || searchNeedsInitialization || searchLoading || searchError) return;
+    const scan = ++searchScanId.current;
+    const timer = window.setTimeout(() => {
+      setSearchRunning(true);
+      void searchVersePageAsync(searchCorpus, searchQuery, {
+        words: searchWords,
+        match: searchMatch,
+        caseSensitive: searchCaseSensitive,
+        scope: searchScope,
+        locale: translation?.lang,
+      }, 0, 20, () => scan !== searchScanId.current).then((page) => {
+        if (scan !== searchScanId.current) return;
+        setSearchResults(page.results);
+        setSearchCursor(page.nextCursor);
+        setSearchComplete(page.complete);
+        setSearchRunning(false);
+      });
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [searchCaseSensitive, searchCorpus, searchError, searchLoading, searchMatch, searchNeedsInitialization, searchQuery, searchScope, searchWords, translation?.lang]);
+
+  const loadMoreSearchResults = () => {
+    if (searchRunning || searchComplete || searchNeedsInitialization || !searchQuery.trim()) return;
+    const scan = ++searchScanId.current;
+    setSearchRunning(true);
+    window.setTimeout(() => {
+      void searchVersePageAsync(searchCorpus, searchQuery, {
+        words: searchWords,
+        match: searchMatch,
+        caseSensitive: searchCaseSensitive,
+        scope: searchScope,
+        locale: translation?.lang,
+      }, searchCursor, 20, () => scan !== searchScanId.current).then((page) => {
+        if (scan !== searchScanId.current) return;
+        setSearchResults((current) => [...current, ...page.results]);
+        setSearchCursor(page.nextCursor);
+        setSearchComplete(page.complete);
+        setSearchRunning(false);
+      });
+    }, 0);
+  };
+
+  const restartSearch = (value: string) => {
+    setSearchQuery(value);
+    searchScanId.current += 1;
+    setSearchResults([]);
+    setSearchCursor(0);
+    setSearchComplete(false);
+    setSearchRunning(Boolean(value.trim()));
+    setSearchError("");
+    setSearchOpen(true);
+  };
 
   const currentMarkings = useMemo(
     () => markings.filter((marking) => markingMatchesPassage(marking, route)),
@@ -730,6 +782,7 @@ export default function Home() {
     setSearchCorpus([]);
     setSearchCorpusKey("");
     setSearchQuery("");
+    setSearchResults([]);
     setSearchOpen(false);
     setDrawer(null);
     setNeedsDaily(true);
@@ -774,10 +827,7 @@ export default function Home() {
             placeholder="Search"
             aria-controls="bible-search"
             onFocus={() => setSearchOpen(true)}
-            onChange={(event) => {
-              setSearchQuery(event.target.value);
-              setSearchOpen(true);
-            }}
+            onChange={(event) => restartSearch(event.target.value)}
           />
         </label>
         <span className="top-reference">{passage?.name ?? "Opening Bible"}</span>
@@ -815,8 +865,12 @@ export default function Home() {
       {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label="Search Bible">
         <div className="search-heading">
           <div><strong>Search {translation?.abbreviation.toUpperCase()}</strong><small>{searchCorpusKey ? `${searchCorpus.length.toLocaleString()} verses ready offline` : "The whole translation is cached for fast searching"}</small></div>
-          <button type="button" aria-label="Close search" onClick={() => setSearchOpen(false)}>×</button>
+          <button type="button" aria-label="Close search" onClick={() => { searchScanId.current += 1; setSearchRunning(false); setSearchOpen(false); }}>×</button>
         </div>
+        <label className="search-query">
+          <span className="sr-only">Search this translation</span>
+          <input autoFocus type="search" value={searchQuery} placeholder="Search the Bible" onChange={(event) => restartSearch(event.target.value)} />
+        </label>
         <div className="search-filters">
           <label><span>Words</span><select value={searchWords} onChange={(event) => setSearchWords(event.target.value as WordMode)}>
             <option value="all">All words</option><option value="any">Any word</option><option value="phrase">Exact phrase</option>
@@ -832,14 +886,18 @@ export default function Home() {
             {books.map((book) => <option key={book.nr} value={`book:${book.nr}`}>{book.name}</option>)}
           </select></label>
         </div>
-        <div className="search-results" aria-live="polite">
+        <div className="search-results" aria-live="polite" onScroll={(event) => {
+          const element = event.currentTarget;
+          if (element.scrollHeight - element.scrollTop - element.clientHeight < 180) loadMoreSearchResults();
+        }}>
           {!searchQuery.trim() ? <p className="search-prompt">Type a word or phrase to search the current translation.</p> : searchError ? <p className="search-error">{searchError}</p> : searchLoading || searchNeedsInitialization ? <div className="search-initializing"><i /><strong>Initializing search</strong><span>Downloading and indexing {translation?.translation} once.</span></div> : <>
-            <p className="search-count">{searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"}{searchResults.length > 250 ? " · showing the first 250; refine your search to narrow the list" : ""}</p>
-            {searchResults.length ? <ol>{searchResults.slice(0, 250).map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
+            <p className="search-count">{searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"} loaded{searchComplete ? " · end of results" : " · scroll for more"}</p>
+            {searchResults.length ? <ol>{searchResults.map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
               setPendingVerse(result.verse);
               go({ translation: route.translation, book: result.book, chapter: result.chapter });
               setSearchOpen(false);
-            }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : <p className="search-prompt">No verses match these filters.</p>}
+            }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : searchRunning ? <div className="search-more"><i />Searching…</div> : <p className="search-prompt">No verses match these filters.</p>}
+            {searchRunning && searchResults.length ? <div className="search-more"><i />Loading more results</div> : null}
           </>}
         </div>
       </section> : null}
