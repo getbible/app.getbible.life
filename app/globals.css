@@ -440,7 +440,7 @@ summary:focus-visible {
   width: 100%;
   padding: 10px;
   color: var(--muted);
-  font-size: var(--footer-text-size, 20px);
+  font-size: 10px;
   line-height: 1.35;
 }
 .site-footer a {
