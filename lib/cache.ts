@@ -1,14 +1,14 @@
-import { API_ROOT, Book, Chapter, ChapterInfo, Translation, fresh, validSha } from "./getbible";
+import { API_ROOT, Book, Chapter, ChapterInfo, Translation, WholeTranslation, fresh, validSha } from "./getbible";
 
 const CACHE = "getbible-reader-v1";
 const META = "getbible-reader:meta:v1";
 type HashSet = { checkedAt:number; hashes:Record<string,string> };
-type Metadata = { version:1; translations:HashSet; books:Record<string,HashSet>; chapters:Record<string,HashSet>; loaded:Record<string,string> };
+type Metadata = { version:1; translations:HashSet; books:Record<string,HashSet>; chapters:Record<string,HashSet>; loaded:Record<string,string>; full:Record<string,string> };
 export type Result<T> = { data:T; cached:boolean; verified:boolean };
 
-const blank = ():Metadata => ({version:1,translations:{checkedAt:0,hashes:{}},books:{},chapters:{},loaded:{}});
+const blank = ():Metadata => ({version:1,translations:{checkedAt:0,hashes:{}},books:{},chapters:{},loaded:{},full:{}});
 const metadata = ():Metadata => {
-  try { const data=JSON.parse(localStorage.getItem(META) || "null") as Metadata|null; return data?.version===1?data:blank(); }
+  try { const data=JSON.parse(localStorage.getItem(META) || "null") as Metadata|null; return data?.version===1?{...data,full:data.full||{}}:blank(); }
   catch { return blank(); }
 };
 const save = (data:Metadata) => localStorage.setItem(META,JSON.stringify(data));
@@ -29,7 +29,11 @@ export async function translations():Promise<Result<Record<string,Translation>>>
   if(saved && fresh(meta.translations.checkedAt)) return {data:saved,cached:true,verified:true};
   try {
     const data=await network<Record<string,Translation>>(url), next=hashes(data);
-    for(const [abbr,sha] of Object.entries(meta.translations.hashes)) if(next[abbr]!==sha) await purge(`${API_ROOT}/${abbr}/`);
+    for(const [abbr,sha] of Object.entries(meta.translations.hashes)) if(next[abbr]!==sha) {
+      await purge(`${API_ROOT}/${abbr}/`);
+      await (await cache()).delete(`${API_ROOT}/${abbr}.json`);
+      delete meta.full[abbr];
+    }
     meta.translations={checkedAt:Date.now(),hashes:next}; save(meta); await write(url,data); return {data,cached:false,verified:true};
   } catch(error) { if(saved) return {data:saved,cached:true,verified:false}; throw error; }
 }
@@ -62,6 +66,18 @@ export async function chapter(abbr:string,book:number,nr:number):Promise<Result<
     const sha=(await response.text()).trim(); if(!validSha(sha)) throw new Error("Invalid chapter hash");
     const meta=metadata(); if(saved && meta.loaded[key]===sha) return {data:saved,cached:true,verified:true};
     const data=await network<Chapter>(url); await write(url,data); meta.loaded[key]=sha; save(meta); return {data,cached:false,verified:true};
+  } catch(error) { if(saved) return {data:saved,cached:true,verified:false}; throw error; }
+}
+
+export async function fullTranslation(abbr:string,sha:string):Promise<Result<WholeTranslation>> {
+  const url=`${API_ROOT}/${abbr}.json`, meta=metadata(), saved=await read<WholeTranslation>(url);
+  if(saved && validSha(sha) && meta.full[abbr]===sha) return {data:saved,cached:true,verified:true};
+  try {
+    const data=await network<WholeTranslation>(url);
+    await write(url,data);
+    meta.full[abbr]=sha;
+    save(meta);
+    return {data,cached:false,verified:true};
   } catch(error) { if(saved) return {data:saved,cached:true,verified:false}; throw error; }
 }
 

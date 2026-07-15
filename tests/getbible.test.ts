@@ -4,8 +4,9 @@ import { WEEK_MS, fresh, parsePassage, passageSearch, translationValues, validSh
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
-import { boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
+import { boundaryIntent, boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance.ts";
+import { flattenTranslation, searchVerses } from "../lib/search.ts";
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -151,6 +152,35 @@ test("changes chapters only when scrolling outward at a reading boundary", () =>
   assert.equal(boundaryTurn(-100, 0, 800, 2_000), -1);
   assert.equal(boundaryTurn(100, 500, 800, 2_000), 0);
   assert.equal(boundaryTurn(-100, 500, 800, 2_000), 0);
+});
+
+test("requires a separate second wheel or touch gesture at a boundary", () => {
+  const first = boundaryIntent(null, 1, 1_000);
+  assert.equal(first.turn, 0);
+  assert.equal(boundaryIntent(first.intent, 1, 1_100).turn, 0);
+  assert.equal(boundaryIntent(first.intent, 1, 1_500).turn, 1);
+  assert.equal(boundaryIntent(first.intent, -1, 1_500).turn, 0);
+});
+
+test("searches a complete translation with word, phrase, case, and scope filters", () => {
+  const corpus = flattenTranslation({
+    translation: "Test", abbreviation: "tst", language: "English", lang: "en", direction: "LTR",
+    books: [
+      { nr: 1, name: "Genesis", chapters: [{ chapter: 1, name: "Genesis 1", verses: [
+        { chapter: 1, verse: 1, name: "Genesis 1:1", text: "The woman watches cats jump." },
+        { chapter: 1, verse: 2, name: "Genesis 1:2", text: "A man and a cat." },
+      ] }] },
+      { nr: 40, name: "Matthew", chapters: [{ chapter: 1, name: "Matthew 1", verses: [
+        { chapter: 1, verse: 1, name: "Matthew 1:1", text: "The man jumps." },
+      ] }] },
+    ],
+  });
+  const options = { words: "all" as const, match: "exact" as const, caseSensitive: false, scope: "all" as const, locale: "en" };
+  assert.deepEqual(searchVerses(corpus, "the jumps", options).map((verse) => verse.reference), ["Matthew 1:1"]);
+  assert.equal(searchVerses(corpus, "cat", { ...options, words: "any", match: "partial" }).length, 2);
+  assert.deepEqual(searchVerses(corpus, "The man", { ...options, words: "phrase", scope: "nt" }).map((verse) => verse.reference), ["Matthew 1:1"]);
+  assert.equal(searchVerses(corpus, "the man", { ...options, words: "phrase", caseSensitive: true }).length, 0);
+  assert.deepEqual(searchVerses(corpus, "cat", { ...options, scope: "book:1" }).map((verse) => verse.reference), ["Genesis 1:2"]);
 });
 
 test("clears only getBible.Life reader storage keys", () => {

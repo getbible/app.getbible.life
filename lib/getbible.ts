@@ -7,6 +7,9 @@ export interface Book { nr:number; name:string; sha:string; direction:Direction 
 export interface ChapterInfo { chapter:number; name:string; sha:string }
 export interface Verse { chapter:number; verse:number; name:string; text:string }
 export interface Chapter { translation:string; abbreviation:string; language:string; direction:Direction; book_nr:number; book_name:string; chapter:number; name:string; verses:Verse[] }
+export interface WholeTranslationChapter { chapter:number; name:string; verses:Verse[] }
+export interface WholeTranslationBook { nr:number; name:string; chapters:WholeTranslationChapter[] }
+export interface WholeTranslation { translation:string; abbreviation:string; language:string; lang:string; direction:Direction; books:WholeTranslationBook[] }
 export interface Passage { translation:string; book:number; chapter:number }
 
 export const valuesByNumber = <T>(record:Record<string,T>):T[] =>

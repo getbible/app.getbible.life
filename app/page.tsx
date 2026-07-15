@@ -25,6 +25,7 @@ import {
   chapter as loadChapter,
   chapters as loadChapters,
   clearCache,
+  fullTranslation as loadFullTranslation,
   translations as loadTranslations,
 } from "../lib/cache";
 import {
@@ -43,8 +44,9 @@ import {
 } from "../lib/markings";
 import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyReference } from "../lib/daily";
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
-import { boundaryTurn, readerStorageKeys } from "../lib/reader-state";
+import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance";
+import { flattenTranslation, searchVerses, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -148,10 +150,24 @@ export default function Home() {
   const [noteEditor, setNoteEditor] = useState<{ verse: number; reference: string; text: string } | null>(null);
   const [needsDaily, setNeedsDaily] = useState(false);
   const [pendingVerse, setPendingVerse] = useState<number | null>(null);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [searchWords, setSearchWords] = useState<WordMode>("all");
+  const [searchMatch, setSearchMatch] = useState<MatchMode>("exact");
+  const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
+  const [searchScope, setSearchScope] = useState<SearchScope>("all");
+  const [searchCorpus, setSearchCorpus] = useState<SearchVerse[]>([]);
+  const [searchCorpusKey, setSearchCorpusKey] = useState("");
+  const [searchLoading, setSearchLoading] = useState(false);
+  const [searchError, setSearchError] = useState("");
   const requestId = useRef(0);
-  const touchStart = useRef<number | null>(null);
+  const searchRequestId = useRef(0);
+  const touchStart = useRef<{ x: number; y: number; boundary: -1 | 0 | 1 } | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const boundaryLock = useRef(false);
+  const boundaryAttempt = useRef<BoundaryIntent | null>(null);
+  const wheelGestureActive = useRef(false);
+  const wheelGestureTimer = useRef(0);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -408,6 +424,7 @@ export default function Home() {
     const keydown = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
         setDrawer(null);
+        setSearchOpen(false);
         setTextSelection(null);
         setWholeVerseSelection(null);
       }
@@ -420,21 +437,71 @@ export default function Home() {
 
   useEffect(() => {
     boundaryLock.current = false;
+    boundaryAttempt.current = null;
+    wheelGestureActive.current = false;
+    window.clearTimeout(wheelGestureTimer.current);
     if (drawer || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
       const root = document.documentElement;
       const direction = boundaryTurn(event.deltaY, window.scrollY, window.innerHeight, root.scrollHeight);
-      if (direction && !boundaryLock.current) {
+      if (!direction) {
+        boundaryAttempt.current = null;
+        return;
+      }
+      window.clearTimeout(wheelGestureTimer.current);
+      wheelGestureTimer.current = window.setTimeout(() => { wheelGestureActive.current = false; }, 180);
+      if (wheelGestureActive.current) return;
+      wheelGestureActive.current = true;
+      const next = boundaryIntent(boundaryAttempt.current, direction, performance.now(), 0, 2200);
+      boundaryAttempt.current = next.intent;
+      if (next.turn && !boundaryLock.current) {
         boundaryLock.current = true;
-        void turn(direction);
+        void turn(next.turn);
       }
     };
 
     window.addEventListener("wheel", wheel, { passive: true });
-    return () => window.removeEventListener("wheel", wheel);
+    return () => {
+      window.clearTimeout(wheelGestureTimer.current);
+      window.removeEventListener("wheel", wheel);
+    };
   }, [drawer, loading, passage, route, turn]);
+
+  useEffect(() => {
+    const query = searchQuery.trim();
+    if (!searchOpen || !query || !translation) return;
+    const key = `${translation.abbreviation}:${translation.sha}`;
+    if (searchCorpusKey === key) return;
+    const activeRequest = ++searchRequestId.current;
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true);
+      setSearchError("");
+      void loadFullTranslation(translation.abbreviation, translation.sha)
+        .then((result) => {
+          if (activeRequest !== searchRequestId.current) return;
+          setSearchCorpus(flattenTranslation(result.data));
+          setSearchCorpusKey(key);
+        })
+        .catch((caught) => {
+          if (activeRequest === searchRequestId.current) setSearchError(caught instanceof Error ? caught.message : "Search could not be initialized.");
+        })
+        .finally(() => {
+          if (activeRequest === searchRequestId.current) setSearchLoading(false);
+        });
+    }, 180);
+    return () => window.clearTimeout(timer);
+  }, [searchCorpusKey, searchOpen, searchQuery, translation]);
+
+  const searchResults = useMemo(() => searchVerses(searchCorpus, searchQuery, {
+    words: searchWords,
+    match: searchMatch,
+    caseSensitive: searchCaseSensitive,
+    scope: searchScope,
+    locale: translation?.lang,
+  }), [searchCaseSensitive, searchCorpus, searchMatch, searchQuery, searchScope, searchWords, translation?.lang]);
+  const searchNeedsInitialization = Boolean(searchQuery.trim() && translation && searchCorpusKey !== `${translation.abbreviation}:${translation.sha}`);
 
   const currentMarkings = useMemo(
     () => markings.filter((marking) => markingMatchesPassage(marking, route)),
@@ -622,13 +689,17 @@ export default function Home() {
   };
 
   const clearAllLocalData = async () => {
-    if (!window.confirm("Clear all local getBible.Life data? This permanently removes your markings, notes, colors, reading position, settings, and cached Bible chapters from this browser.")) return;
+    if (!window.confirm("Clear all local getBible.Life data? This permanently removes your markings, notes, colors, reading position, settings, cached Bible chapters, and translation search indexes from this browser.")) return;
     await clearCache();
     readerStorageKeys(Object.keys(localStorage)).forEach((key) => localStorage.removeItem(key));
     setMarkings([]);
     setNotes([]);
     setColors(DEFAULT_MARKING_COLORS);
     setActiveColorId(DEFAULT_MARKING_COLORS[0].id);
+    setSearchCorpus([]);
+    setSearchCorpusKey("");
+    setSearchQuery("");
+    setSearchOpen(false);
     setDrawer(null);
     setNeedsDaily(true);
   };
@@ -664,6 +735,20 @@ export default function Home() {
           <span />
         </button>
         <button className="brand" type="button" title="Open today’s Scripture" onClick={() => void openDailyVerse()}>getBible.Life</button>
+        <label className="header-search">
+          <span className="sr-only">Search this translation</span>
+          <input
+            type="search"
+            value={searchQuery}
+            placeholder="Search"
+            aria-controls="bible-search"
+            onFocus={() => setSearchOpen(true)}
+            onChange={(event) => {
+              setSearchQuery(event.target.value);
+              setSearchOpen(true);
+            }}
+          />
+        </label>
         <span className="top-reference">{passage?.name ?? "Opening Bible"}</span>
         <nav className="compact-navigation" aria-label="Chapter navigation">
           <button
@@ -695,6 +780,38 @@ export default function Home() {
           {dark ? "Light" : "Dark"}
         </button>
       </header>
+
+      {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label="Search Bible">
+        <div className="search-heading">
+          <div><strong>Search {translation?.abbreviation.toUpperCase()}</strong><small>{searchCorpusKey ? `${searchCorpus.length.toLocaleString()} verses ready offline` : "The whole translation is cached for fast searching"}</small></div>
+          <button type="button" aria-label="Close search" onClick={() => setSearchOpen(false)}>×</button>
+        </div>
+        <div className="search-filters">
+          <label><span>Words</span><select value={searchWords} onChange={(event) => setSearchWords(event.target.value as WordMode)}>
+            <option value="all">All words</option><option value="any">Any word</option><option value="phrase">Exact phrase</option>
+          </select></label>
+          <label><span>Match</span><select value={searchMatch} onChange={(event) => setSearchMatch(event.target.value as MatchMode)}>
+            <option value="exact">Exact word</option><option value="partial">Partial word</option>
+          </select></label>
+          <label><span>Case</span><select value={searchCaseSensitive ? "sensitive" : "insensitive"} onChange={(event) => setSearchCaseSensitive(event.target.value === "sensitive")}>
+            <option value="insensitive">Insensitive</option><option value="sensitive">Sensitive</option>
+          </select></label>
+          <label><span>Where</span><select value={searchScope} onChange={(event) => setSearchScope(event.target.value as SearchScope)}>
+            <option value="all">Whole Bible</option><option value="ot">Old Testament</option><option value="nt">New Testament</option>
+            {books.map((book) => <option key={book.nr} value={`book:${book.nr}`}>{book.name}</option>)}
+          </select></label>
+        </div>
+        <div className="search-results" aria-live="polite">
+          {!searchQuery.trim() ? <p className="search-prompt">Type a word or phrase to search the current translation.</p> : searchError ? <p className="search-error">{searchError}</p> : searchLoading || searchNeedsInitialization ? <div className="search-initializing"><i /><strong>Initializing search</strong><span>Downloading and indexing {translation?.translation} once.</span></div> : <>
+            <p className="search-count">{searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"}{searchResults.length > 250 ? " · showing the first 250; refine your search to narrow the list" : ""}</p>
+            {searchResults.length ? <ol>{searchResults.slice(0, 250).map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
+              setPendingVerse(result.verse);
+              go({ translation: route.translation, book: result.book, chapter: result.chapter });
+              setSearchOpen(false);
+            }}><strong>{result.reference}</strong><span>{result.text}</span></button></li>)}</ol> : <p className="search-prompt">No verses match these filters.</p>}
+          </>}
+        </div>
+      </section> : null}
 
       <button
         className="drawer-scrim"
@@ -1015,14 +1132,41 @@ export default function Home() {
             style={{ "--text-size": `${textSize}px` } as CSSProperties}
             data-reader-font={readerFont}
             onTouchStart={(event) => {
-              touchStart.current = event.changedTouches[0]?.clientX ?? null;
+              const touch = event.changedTouches[0];
+              if (!touch) return;
+              const root = document.documentElement;
+              touchStart.current = {
+                x: touch.clientX,
+                y: touch.clientY,
+                boundary: window.scrollY <= 1 ? -1 : window.innerHeight + window.scrollY >= root.scrollHeight - 2 ? 1 : 0,
+              };
             }}
             onTouchEnd={(event) => {
-              if (touchStart.current === null) return;
-              const end = event.changedTouches[0]?.clientX ?? touchStart.current;
-              const distance = end - touchStart.current;
+              const start = touchStart.current;
+              const touch = event.changedTouches[0];
               touchStart.current = null;
-              if (Math.abs(distance) > 70) void turn(distance > 0 ? -1 : 1);
+              if (!start || !touch) return;
+              const horizontal = touch.clientX - start.x;
+              const vertical = touch.clientY - start.y;
+              if (Math.abs(horizontal) > 70 && Math.abs(horizontal) > Math.abs(vertical)) {
+                void turn(horizontal > 0 ? -1 : 1);
+                return;
+              }
+              const outward = start.boundary === 1 ? vertical < -45 : start.boundary === -1 ? vertical > 45 : false;
+              if (!outward || !start.boundary) {
+                if (Math.abs(vertical) > 45 && Math.abs(vertical) > Math.abs(horizontal)) {
+                  const root = document.documentElement;
+                  const reached = window.scrollY <= 1 ? -1 : window.innerHeight + window.scrollY >= root.scrollHeight - 2 ? 1 : 0;
+                  if (reached) boundaryAttempt.current = { direction: reached, at: performance.now() };
+                }
+                return;
+              }
+              const next = boundaryIntent(boundaryAttempt.current, start.boundary, performance.now(), 0, 2200);
+              boundaryAttempt.current = next.intent;
+              if (next.turn && !boundaryLock.current) {
+                boundaryLock.current = true;
+                void turn(next.turn);
+              }
             }}
           >
             <header className="passage-line">
