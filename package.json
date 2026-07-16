@@ -16,7 +16,7 @@
   "license": "GPL-3.0-only",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/getBible/app-gpt.git"
+    "url": "git+https://github.com/getBible/app.getbible.life.git"
   },
   "homepage": "https://getbible.life/",
   "engines": {
