@@ -1,0 +1,254 @@
+export const ENGLISH_UI_MESSAGES = {
+  openBibleNavigation: "Open Bible navigation",
+  closeBibleNavigation: "Close Bible navigation",
+  openTodaysScripture: "Open today’s Scripture",
+  searchThisTranslation: "Search this translation",
+  search: "Search",
+  openingBible: "Opening Bible",
+  chapterNavigation: "Chapter navigation",
+  previousChapter: "Previous chapter",
+  nextChapter: "Next chapter",
+  returnToReader: "Return to Bible reader",
+  openAsMarkdown: "Open chapter as Markdown",
+  study: "Study",
+  light: "Light",
+  dark: "Dark",
+  searchBible: "Search Bible",
+  searchTranslation: "Search {translation}",
+  versesReadyOffline: "{count} verses ready offline",
+  wholeTranslationCached: "The whole translation is cached for fast searching",
+  closeSearch: "Close search",
+  searchTheBible: "Search the Bible",
+  words: "Words",
+  allWords: "All words",
+  anyWord: "Any word",
+  exactPhrase: "Exact phrase",
+  match: "Match",
+  exactWord: "Exact word",
+  partialWord: "Partial word",
+  case: "Case",
+  insensitive: "Insensitive",
+  sensitive: "Sensitive",
+  where: "Where",
+  wholeBible: "Whole Bible",
+  oldTestament: "Old Testament",
+  newTestament: "New Testament",
+  searchPrompt: "Type a word or phrase to search the current translation.",
+  initializingSearch: "Initializing search",
+  downloadingTranslation: "Downloading and indexing {translation} once.",
+  resultsLoaded: "{count} results loaded",
+  resultLoaded: "1 result loaded",
+  endOfResults: "end of results",
+  scrollForMore: "scroll for more",
+  searching: "Searching…",
+  noSearchResults: "No verses match these filters.",
+  loadingMoreResults: "Loading more results",
+  searchInitializationError: "Search could not be initialized.",
+  translationDetails: "Translation details",
+  howMaintained: "How {getBible} is maintained",
+  howSynchronized: "How {getBible} stays synchronized",
+  lastUpdated: "Last updated: {date}",
+  language: "Language",
+  encoding: "Encoding",
+  direction: "Direction",
+  distributionAbbreviation: "Distribution abbreviation",
+  versification: "Versification",
+  description: "Description",
+  aboutAndContact: "About and contact information",
+  license: "License",
+  source: "Source",
+  apiResource: "{getBible} API resource",
+  translationHistory: "Translation history",
+  closeInformation: "Close information",
+  modules: "modules",
+  officialHashRepository: "official getBible hash repository",
+  bibleApi: "Bible API",
+  translationsLabel: "translations",
+  hashValues: "hash values",
+  supportSystem: "support system",
+  syncParagraph1: "At {getBible}, we’ve established a robust system to keep our API synchronized with the {crossWire} project’s {modules}. Let me explain how this integration works in simple terms.",
+  syncParagraph2: "We source our Bible text directly from the {crossWire} {modules}. To monitor updates, we generate hash values for each chapter, book, and translation. These unique identifiers change only when the underlying content changes, ensuring tight integration between {getBible} and the {crossWire} modules.",
+  syncParagraph3: "Every month, an automated process runs for approximately three hours. We fetch the latest Bible text from the {crossWire} modules, then compare the new hashes and text with the previous versions. Changes update our {hashRepository} and the {bibleApi} for all affected {translations}. This system has operated seamlessly for several years.",
+  syncParagraph4: "After updates finish, applications using our {bibleApi} should monitor the {hashValues} at chapter, book, or translation level. A changed value means the application should refresh its corresponding content.",
+  syncParagraph5: "Hash values can change because of textual corrections, such as restoring omitted verses, correcting spelling, or resolving discrepancies reported by publishers maintaining the {modules} at {crossWire}.",
+  syncParagraph6: "The {crossWire} initiative, also known as the SWORD Project, is the source of truth for {getBible}. Changes in the {crossWire} {modules} are reflected in our API within days, giving users precise and current Bible text. We pledge to uphold this standard while {getBible} exists and our build scripts remain operational.",
+  syncParagraph7: "We are united in preserving the integrity and authenticity of the Bible text. For questions or more information, use our {supportSystem}. We are here to help and will respond promptly.",
+  syncParagraph8: "Thank you for your understanding and for being an integral part of the {getBible} community.",
+  closeMenu: "Close menu",
+  choosePassage: "Choose passage",
+  translation: "Translation",
+  book: "Book",
+  chapter: "Chapter",
+  chapters: "Chapters",
+  readerOptions: "Reader options",
+  appearanceControl: "Appearance control",
+  followSystem: "Follow system",
+  manual: "Manual",
+  textSize: "Text size",
+  readingFont: "Reading font",
+  readingWidth: "Reading width",
+  page: "Page",
+  fullScreenWidth: "Full screen width",
+  verseLayout: "Verse layout",
+  oneVersePerLine: "One verse per line",
+  continuousParagraph: "Continuous paragraph",
+  lightAppearance: "Light appearance",
+  darkAppearance: "Dark appearance",
+  pureWhite: "Pure white",
+  warmPaper: "Warm paper",
+  softIvory: "Soft ivory",
+  coolMist: "Cool mist",
+  pureBlack: "Pure black",
+  warmBrown: "Warm brown",
+  softCharcoal: "Soft charcoal",
+  midnightBlue: "Midnight blue",
+  classicSerif: "Classic serif",
+  bookSerif: "Book serif",
+  cleanSans: "Clean sans",
+  systemSans: "System sans",
+  contentHashVerified: "Content hash verified",
+  showingSavedContent: "Showing saved content",
+  clearAllLocalData: "Clear all local data",
+  studyHelp: "Keep long-term markings and verse notes in this browser.",
+  studyTools: "Study tools",
+  markings: "Markings",
+  notes: "Notes",
+  savedMarkings: "Saved markings",
+  markingGroups: "Marking groups",
+  findMarkingGroup: "Find a marking group",
+  searchGroups: "Search {count} groups",
+  markingCount: "{count} markings",
+  oneMarking: "1 marking",
+  noMatchingGroups: "No marking groups match your search.",
+  allMarkingGroups: "All marking groups",
+  bibleOrder: "Bible order",
+  verseNumber: "Verse {verse}",
+  marking: "Marking",
+  deleteMarkingFor: "Delete marking for {reference}",
+  noMarkingsInGroup: "No markings in this group yet.",
+  noMarkingsYet: "No markings yet.",
+  manageGroups: "Manage group names and colors",
+  useGroup: "Use {name}",
+  groupColor: "{name} color",
+  colorName: "Color name",
+  removeGroup: "Remove {name}",
+  addColor: "Add color",
+  newColor: "New color",
+  backupAndReset: "Backup and reset",
+  export: "Export",
+  importAndMerge: "Import and merge",
+  deleteAll: "Delete all",
+  verseNotes: "Verse notes",
+  editNoteFor: "Edit note for {reference}",
+  edit: "Edit",
+  deleteNoteFor: "Delete the note for {reference}?",
+  noVerseNotes: "No verse notes yet. Select a verse and choose Add note to create one.",
+  unableToOpen: "Unable to open this passage",
+  tryAgain: "Try again",
+  loadingPassage: "Loading passage",
+  markdown: "Markdown",
+  copy: "Copy",
+  downloadMarkdown: "Download .md",
+  verified: "verified",
+  saved: "saved",
+  verifiedExplanation: "Verified means this chapter’s hash is in sync with the CrossWire source modules used by the GetBible API.",
+  savedExplanation: "Saved means this chapter is shown from your browser cache and could not currently be checked against the CrossWire source modules.",
+  closeVerification: "Close verification explanation",
+  chooseMarkingFor: "Choose marking color for {reference}",
+  chooseColorForVerse: "Choose a color for this verse",
+  note: "Note",
+  wordsOfEternalLife: "The words of eternal life",
+  lovinglyMaintainedBy: "Lovingly maintained by",
+  howLovinglyMaintained: "How {getBible} is lovingly maintained",
+  markSelectedText: "Mark selected text",
+  markQuote: "Mark “{quote}”",
+  markReference: "Mark {reference}",
+  chooseAnotherGroup: "Choose another marking group",
+  moreGroups: "More groups…",
+  removeWholeVerseColor: "Remove whole-verse color from {reference}",
+  noWholeVerseColor: "No whole-verse color",
+  none: "None",
+  editNote: "Edit note",
+  addNote: "Add note",
+  cancelMarking: "Cancel marking",
+  noteFor: "Note for {reference}",
+  closeNoteEditor: "Close note editor",
+  writeYourNote: "Write your note…",
+  delete: "Delete",
+  cancel: "Cancel",
+  saveNote: "Save note",
+  previous: "Previous",
+  next: "Next",
+  loading: "Loading",
+  todaysScriptureLoadError: "Today’s Scripture could not be loaded.",
+  todaysScriptureBookUnavailable: "The daily Scripture book “{book}” is unavailable.",
+  todaysScriptureOpenError: "Today’s Scripture could not be opened.",
+  noTranslations: "No translations are available.",
+  translationHasNoBooks: "This translation has no books.",
+  bookHasNoChapters: "This book has no chapters.",
+  passageLoadError: "The passage could not be loaded.",
+  deleteColorConfirm: "Delete “{name}” and its {count} saved markings? This cannot be undone.",
+  deleteColorConfirmOne: "Delete “{name}” and its saved marking? This cannot be undone.",
+  exportComplete: "Exported {markings} markings and {notes} notes.",
+  importComplete: "Imported {markings} new markings and {notes} notes; existing data was kept.",
+  backupImportError: "The study backup could not be imported.",
+  clearAllConfirm: "Clear all local getBible.Life data? This permanently removes your markings, notes, colors, reading position, settings, cached Bible chapters, and translation search indexes from this browser.",
+  deleteAllMarkingsConfirm: "Delete all {count} saved markings? Your color groups will remain. This cannot be undone.",
+  allMarkingsDeleted: "All markings were deleted.",
+  chapterCopied: "Chapter copied.",
+  copyUnavailable: "Copy is unavailable in this browser. Select the text and copy it manually.",
+  markdownCreated: "Markdown file created.",
+} as const;
+
+export type UiMessageKey = keyof typeof ENGLISH_UI_MESSAGES;
+export type UiVariables = Record<string, string | number>;
+const UI_MESSAGE_KEYS = Object.keys(ENGLISH_UI_MESSAGES) as UiMessageKey[];
+const UI_MESSAGE_INDEX = new Map(UI_MESSAGE_KEYS.map((key, index) => [key, index]));
+
+const ALIASES: Record<string, string> = {
+  enm: "en",
+  "zh-cn": "zh-Hans",
+  "zh-tw": "zh-Hant",
+};
+
+export const SUPPORTED_UI_LOCALES = Object.freeze([
+  "af", "ar", "br", "ch", "chr", "cop", "cs", "cu", "da", "de", "el", "en", "enm", "eo", "es", "et", "eu", "fi", "fr", "gd", "got", "grc", "gv", "hbo", "he", "hr", "hu", "hy", "it", "ja", "ko", "la", "lt", "lv", "mg", "mi", "mlf", "mn", "my", "nb", "nd", "nl", "nn", "pl", "pon", "pot", "ppk", "prs", "pt", "rmq", "ro", "ru", "sn", "sq", "sr", "sv", "sw", "syr", "th", "tl", "tlh", "tpi", "tr", "tsg", "uk", "vi", "zh", "zh-Hans", "zh-Hant",
+]);
+const SUPPORTED_UI_LOCALE_SET = new Set<string>(SUPPORTED_UI_LOCALES);
+
+export function uiLocale(code: string | null | undefined): string {
+  const raw = (code || "en").trim();
+  if (!raw) return "en";
+  if (raw === "zh-Hans" || raw === "zh-Hant") return raw;
+  const normalized = raw.replace("_", "-");
+  return SUPPORTED_UI_LOCALE_SET.has(normalized)
+    ? normalized
+    : ALIASES[normalized.toLowerCase()] ?? normalized.split("-")[0] ?? "en";
+}
+
+export function createUiTranslator(code: string | null | undefined, messages: readonly string[] = []) {
+  uiLocale(code);
+  return (key: UiMessageKey, variables: UiVariables = {}): string => {
+    const index = UI_MESSAGE_INDEX.get(key);
+    const template = (index === undefined ? undefined : messages[index]) || ENGLISH_UI_MESSAGES[key];
+    return template.replace(/\{([a-zA-Z][a-zA-Z0-9]*)\}/g, (placeholder, name: string) =>
+      Object.prototype.hasOwnProperty.call(variables, name) ? String(variables[name]) : placeholder,
+    );
+  };
+}
+
+export async function loadUiMessages(code: string | null | undefined): Promise<readonly string[]> {
+  const locale = uiLocale(code);
+  if (locale === "en") return [];
+  const cached = UI_MESSAGE_CACHE.get(locale);
+  if (cached) return cached;
+  const request = fetch(`/locales/${encodeURIComponent(locale)}.json`).then(async (response) => {
+    if (!response.ok) throw new Error(`UI locale ${locale} returned HTTP ${response.status}`);
+    const messages = await response.json();
+    return Array.isArray(messages) && messages.every((message) => typeof message === "string") ? messages : [];
+  });
+  UI_MESSAGE_CACHE.set(locale, request);
+  return request;
+}
+
+const UI_MESSAGE_CACHE = new Map<string, Promise<readonly string[]>>();

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, resolvedLanguageName, translationLanguage, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
@@ -8,6 +9,9 @@ import { boundaryIntent, boundaryTurn, normalizeReadingWidth, readerLayout, read
 import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance.ts";
 import { flattenTranslation, highlightSearchText, SEARCH_ARRIVAL_MS, searchVersePage, searchVersePageAsync, searchVerses } from "../lib/search.ts";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown.ts";
+import { createUiTranslator, ENGLISH_UI_MESSAGES, SUPPORTED_UI_LOCALES, uiLocale } from "../lib/i18n.ts";
+
+const localeMessages = (locale: string): string[] => JSON.parse(readFileSync(new URL(`../public/locales/${locale}.json`, import.meta.url), "utf8"));
 
 test("parses and sanitizes passage URLs",()=>{
   assert.deepEqual(parsePassage("?translation=AOV&book=19&chapter=23"),{translation:"aov",book:19,chapter:23});
@@ -273,4 +277,37 @@ test("offers stable light and dark reading palettes", () => {
   assert.equal(validPalette(DARK_PALETTES, "brown", "black"), "brown");
   assert.equal(validPalette(DARK_PALETTES, "missing", "black"), "black");
   assert.equal(validPalette(LIGHT_PALETTES, null, "white"), "white");
+});
+
+test("provides UI locale packs for every GetBible language identifier", () => {
+  assert.equal(SUPPORTED_UI_LOCALES.length, 69);
+  const localeIndex: string[] = JSON.parse(readFileSync(new URL("../public/locales/index.json", import.meta.url), "utf8"));
+  assert.deepEqual(localeIndex, [...SUPPORTED_UI_LOCALES]);
+  const messageCount = Object.keys(ENGLISH_UI_MESSAGES).length;
+  for (const locale of localeIndex) assert.equal(localeMessages(locale).length, messageCount, `${locale} message count changed`);
+  for (const code of ["af", "ar", "en", "hbo", "ru", "tpi", "zh-Hans", "zh-Hant"]) {
+    assert.equal(SUPPORTED_UI_LOCALES.includes(code), true, `${code} locale is missing`);
+  }
+  assert.equal(uiLocale("enm"), "enm");
+  assert.equal(uiLocale("unknown-locale"), "unknown");
+});
+
+test("translates interface messages while preserving variables and project names", () => {
+  const af = createUiTranslator("af", localeMessages("af"));
+  const ru = createUiTranslator("ru", localeMessages("ru"));
+  const zh = createUiTranslator("zh-Hant", localeMessages("zh-Hant"));
+  assert.equal(af("search"), "Soek");
+  assert.notEqual(ru("study"), ENGLISH_UI_MESSAGES.study);
+  assert.notEqual(zh("verified"), ENGLISH_UI_MESSAGES.verified);
+  assert.match(af("clearAllConfirm"), /getBible\.Life/);
+  assert.equal(ru("searchTranslation", { translation: "KJV" }).includes("KJV"), true);
+});
+
+test("keeps API scripture and user-created marking names outside UI localization", () => {
+  const translate = createUiTranslator("ru", localeMessages("ru"));
+  const scripture = { book_name: "John", text: "For God so loved the world" };
+  const userGroup = { name: "Promises" };
+  assert.deepEqual(scripture, { book_name: "John", text: "For God so loved the world" });
+  assert.equal(userGroup.name, "Promises");
+  assert.notEqual(translate("search"), "Search");
 });

@@ -3,6 +3,7 @@
 import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
+  type ReactNode,
   useCallback,
   useEffect,
   useMemo,
@@ -54,6 +55,7 @@ import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type R
 import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance";
 import { flattenTranslation, highlightSearchText, SEARCH_ARRIVAL_MS, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
+import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from "../lib/i18n";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -116,6 +118,14 @@ function identifier(): string {
 
 function distributionText(value: string | undefined): string {
   return value?.replace(/\\par/g, "\n").replace(/\n{3,}/g, "\n\n").trim() ?? "";
+}
+
+function localizedLanguageName(translation: Translation, locale: string): string {
+  try {
+    return new Intl.DisplayNames([locale], { type: "language" }).of(translation.lang) ?? translationLanguage(translation);
+  } catch {
+    return translationLanguage(translation);
+  }
 }
 
 function selectionWithin(element: HTMLElement): { start: number; end: number; text: string } | null {
@@ -189,6 +199,7 @@ export default function Home() {
   const [searchRunning, setSearchRunning] = useState(false);
   const [searchArrival, setSearchArrival] = useState<SearchArrival | null>(null);
   const [infoModal, setInfoModal] = useState<InfoModal>(null);
+  const [uiMessages, setUiMessages] = useState<{ locale: string; messages: readonly string[] }>({ locale: "en", messages: [] });
   const requestId = useRef(0);
   const booksRef = useRef<Book[]>([]);
   const searchRequestId = useRef(0);
@@ -199,6 +210,21 @@ export default function Home() {
   const boundaryAttempt = useRef<BoundaryIntent | null>(null);
   const wheelGestureActive = useRef(false);
   const wheelGestureTimer = useRef(0);
+  const locale = uiLocale(translation?.lang);
+  const t = useMemo(() => createUiTranslator(locale, uiMessages.locale === locale ? uiMessages.messages : []), [locale, uiMessages]);
+  const translatorRef = useRef(t);
+
+  const countMessage = (count: number, one: UiMessageKey, many: UiMessageKey) =>
+    t(count === 1 ? one : many, { count });
+  const rich = (key: UiMessageKey, replacements: Record<string, ReactNode>) =>
+    t(key).split(/(\{[a-zA-Z][a-zA-Z0-9]*\})/g).filter(Boolean).map((part, index) => {
+      const name = part.match(/^\{(.+)\}$/)?.[1];
+      return name && replacements[name] ? <span key={`${name}-${index}`}>{replacements[name]}</span> : part;
+    });
+
+  useEffect(() => {
+    translatorRef.current = t;
+  }, [t]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -278,6 +304,19 @@ export default function Home() {
   }, [themeMode]);
 
   useEffect(() => {
+    document.documentElement.lang = locale;
+    document.documentElement.dir = translation?.direction?.toLowerCase() === "rtl" ? "rtl" : "ltr";
+    let active = true;
+    void loadUiMessages(locale).then((messages) => {
+      if (active) setUiMessages({ locale, messages });
+    }).catch((caught) => {
+      console.error(caught);
+      if (active) setUiMessages({ locale, messages: [] });
+    });
+    return () => { active = false; };
+  }, [locale, translation?.direction]);
+
+  useEffect(() => {
     if (!searchOpen && !infoModal) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
@@ -321,7 +360,7 @@ export default function Home() {
       let parsed = daily ? parseDailyReference(daily) : null;
       if (!parsed || !dailyIsCurrent(parsed.date)) {
         const response = await fetch(DAILY_SCRIPTURE_URL, { cache: "no-store" });
-        if (!response.ok) throw new Error("Today’s Scripture could not be loaded.");
+        if (!response.ok) throw new Error(translatorRef.current("todaysScriptureLoadError"));
         daily = await response.json();
         parsed = parseDailyReference(daily);
         localStorage.setItem(DAILY_CACHE, JSON.stringify(daily));
@@ -329,12 +368,13 @@ export default function Home() {
       const allBooks = valuesByNumber((await loadBooks(DEFAULT_TRANSLATION)).data);
       const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
       const book = allBooks.find((item) => normalize(item.name) === normalize(parsed.bookName));
-      if (!book) throw new Error(`The daily Scripture book “${parsed.bookName}” is unavailable.`);
+      if (!book) throw new Error(translatorRef.current("todaysScriptureBookUnavailable", { book: parsed.bookName }));
       setPendingVerse(parsed.verse);
       go({ translation: DEFAULT_TRANSLATION, book: book.nr, chapter: parsed.chapter }, false, book.name);
       setDrawer(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Today’s Scripture could not be opened.");
+      console.error(caught);
+      setError(translatorRef.current("todaysScriptureOpenError"));
     }
   }, [go]);
 
@@ -364,7 +404,7 @@ export default function Home() {
           allTranslations.find((item) => item.abbreviation === route.translation) ??
           allTranslations.find((item) => item.abbreviation === "kjv") ??
           allTranslations[0];
-        if (!selectedTranslation) throw new Error("No translations are available.");
+        if (!selectedTranslation) throw new Error(translatorRef.current("noTranslations"));
 
         const bookResult = await loadBooks(selectedTranslation.abbreviation);
         const allBooks = valuesByNumber(bookResult.data);
@@ -372,7 +412,7 @@ export default function Home() {
         const selectedBook =
           (pathBookSlug ? allBooks.find((item) => bookMatchesSlug(item.name, pathBookSlug)) : null) ??
           allBooks.find((item) => item.nr === route.book) ?? allBooks[0];
-        if (!selectedBook) throw new Error("This translation has no books.");
+        if (!selectedBook) throw new Error(translatorRef.current("translationHasNoBooks"));
 
         const chapterResult = await loadChapters(
           selectedTranslation.abbreviation,
@@ -382,7 +422,7 @@ export default function Home() {
         const selectedChapter =
           allChapters.find((item) => item.chapter === route.chapter) ??
           allChapters[0];
-        if (!selectedChapter) throw new Error("This book has no chapters.");
+        if (!selectedChapter) throw new Error(translatorRef.current("bookHasNoChapters"));
 
         const normalized = {
           translation: selectedTranslation.abbreviation,
@@ -417,9 +457,8 @@ export default function Home() {
         window.scrollTo({ top: 0, behavior: "smooth" });
       } catch (caught) {
         if (activeRequest === requestId.current) {
-          setError(
-            caught instanceof Error ? caught.message : "The passage could not be loaded.",
-          );
+          console.error(caught);
+          setError(translatorRef.current("passageLoadError"));
         }
       } finally {
         if (activeRequest === requestId.current) setLoading(false);
@@ -559,7 +598,10 @@ export default function Home() {
           setSearchCorpusKey(key);
         })
         .catch((caught) => {
-          if (activeRequest === searchRequestId.current) setSearchError(caught instanceof Error ? caught.message : "Search could not be initialized.");
+          if (activeRequest === searchRequestId.current) {
+            console.error(caught);
+            setSearchError(translatorRef.current("searchInitializationError"));
+          }
         })
         .finally(() => {
           if (activeRequest === searchRequestId.current) setSearchLoading(false);
@@ -738,7 +780,7 @@ export default function Home() {
   };
 
   const addColor = () => {
-    const color = { id: identifier(), name: "New color", value: "#fde68a" };
+    const color = { id: identifier(), name: t("newColor"), value: "#fde68a" };
     setColors((current) => [...current, color]);
     setActiveColorId(color.id);
   };
@@ -747,7 +789,7 @@ export default function Home() {
     if (colors.length === 1) return;
     const color = colors.find((item) => item.id === id);
     const linked = markings.filter((marking) => marking.colorId === id).length;
-    if (linked && !window.confirm(`Delete “${color?.name ?? "this color"}” and its ${linked} saved marking${linked === 1 ? "" : "s"}? This cannot be undone.`)) return;
+    if (linked && !window.confirm(t(linked === 1 ? "deleteColorConfirmOne" : "deleteColorConfirm", { name: color?.name ?? t("colorName"), count: linked }))) return;
     setColors((current) => current.filter((color) => color.id !== id));
     setMarkings((current) => current.filter((marking) => marking.colorId !== id));
     if (selectedColorId === id) setSelectedColorId(null);
@@ -776,7 +818,7 @@ export default function Home() {
     link.download = `getBible-Life-markings-${new Date().toISOString().slice(0, 10)}.json`;
     link.click();
     URL.revokeObjectURL(url);
-    setMarkingMessage(`Exported ${markings.length} marking${markings.length === 1 ? "" : "s"} and ${notes.length} note${notes.length === 1 ? "" : "s"}.`);
+    setMarkingMessage(t("exportComplete", { markings: markings.length, notes: notes.length }));
   };
 
   const importMarkings = async (file: File) => {
@@ -790,9 +832,10 @@ export default function Home() {
       const previousNotes = notes.length;
       const nextNotes = mergeNotes(notes, backup.notes ?? []);
       setNotes(nextNotes);
-      setMarkingMessage(`Imported ${nextMarkings.length - previousCount} new marking${nextMarkings.length - previousCount === 1 ? "" : "s"} and ${nextNotes.length - previousNotes} note${nextNotes.length - previousNotes === 1 ? "" : "s"}; existing data was kept.`);
+      setMarkingMessage(t("importComplete", { markings: nextMarkings.length - previousCount, notes: nextNotes.length - previousNotes }));
     } catch (caught) {
-      setMarkingMessage(caught instanceof Error ? caught.message : "The markings backup could not be imported.");
+      console.error(caught);
+      setMarkingMessage(t("backupImportError"));
     }
   };
 
@@ -828,7 +871,7 @@ export default function Home() {
   };
 
   const clearAllLocalData = async () => {
-    if (!window.confirm("Clear all local getBible.Life data? This permanently removes your markings, notes, colors, reading position, settings, cached Bible chapters, and translation search indexes from this browser.")) return;
+    if (!window.confirm(t("clearAllConfirm"))) return;
     await clearCache();
     readerStorageKeys(Object.keys(localStorage)).forEach((key) => localStorage.removeItem(key));
     setMarkings([]);
@@ -845,10 +888,10 @@ export default function Home() {
   };
 
   const deleteAllMarkings = () => {
-    if (!markings.length || !window.confirm(`Delete all ${markings.length} saved markings? Your color groups will remain. This cannot be undone.`)) return;
+    if (!markings.length || !window.confirm(t("deleteAllMarkingsConfirm", { count: markings.length }))) return;
     setMarkings([]);
     setSelectedColorId(null);
-    setMarkingMessage("All markings were deleted.");
+    setMarkingMessage(t("allMarkingsDeleted"));
   };
 
   const openMarking = (marking: Marking) => {
@@ -864,9 +907,9 @@ export default function Home() {
     if (!passage) return;
     try {
       await navigator.clipboard.writeText(chapterMarkdown(passage, { translationName: translation?.translation, copyrightNotice: translation?.distribution_license }));
-      setMarkdownMessage("Chapter copied.");
+      setMarkdownMessage(t("chapterCopied"));
     } catch {
-      setMarkdownMessage("Copy is unavailable in this browser. Select the text and copy it manually.");
+      setMarkdownMessage(t("copyUnavailable"));
     }
   };
 
@@ -878,16 +921,16 @@ export default function Home() {
     link.download = chapterMarkdownFilename(passage);
     link.click();
     URL.revokeObjectURL(url);
-    setMarkdownMessage("Markdown file created.");
+    setMarkdownMessage(t("markdownCreated"));
   };
 
   const translationFacts: Array<[string, string]> = translation ? [
-    ["Language", `${translationLanguage(translation)}${translation.lang ? ` (${translation.lang})` : ""}`],
-    ["Encoding", translation.encoding ?? ""],
-    ["Direction", translation.direction],
+    [t("language"), `${localizedLanguageName(translation, locale)}${translation.lang ? ` (${translation.lang})` : ""}`],
+    [t("encoding"), translation.encoding ?? ""],
+    [t("direction"), translation.direction],
     ["LCSH", translation.distribution_lcsh ?? ""],
-    ["Distribution abbreviation", translation.distribution_abbreviation ?? ""],
-    ["Versification", translation.distribution_versification ?? ""],
+    [t("distributionAbbreviation"), translation.distribution_abbreviation ?? ""],
+    [t("versification"), translation.distribution_versification ?? ""],
     ["SHA", translation.sha],
   ].filter(([, value]) => Boolean(value)) as Array<[string, string]> : [];
   const translationHistory = Object.entries(translation?.distribution_history ?? {})
@@ -899,7 +942,7 @@ export default function Home() {
         <button
           className="menu-button"
           type="button"
-          aria-label={drawer === "reader" ? "Close Bible navigation" : "Open Bible navigation"}
+          aria-label={t(drawer === "reader" ? "closeBibleNavigation" : "openBibleNavigation")}
           aria-expanded={drawer === "reader"}
           onClick={() => setDrawer(drawer === "reader" ? null : "reader")}
         >
@@ -907,24 +950,24 @@ export default function Home() {
           <span />
           <span />
         </button>
-        <button className="brand" type="button" title="Open today’s Scripture" onClick={() => void openDailyVerse()}>getBible.Life</button>
+        <button className="brand" type="button" title={t("openTodaysScripture")} onClick={() => void openDailyVerse()}>getBible.Life</button>
         <label className="header-search">
-          <span className="sr-only">Search this translation</span>
+          <span className="sr-only">{t("searchThisTranslation")}</span>
           <input
             type="search"
             value={searchQuery}
-            placeholder="Search"
+            placeholder={t("search")}
             aria-controls="bible-search"
             onFocus={() => setSearchOpen(true)}
             onChange={(event) => restartSearch(event.target.value)}
           />
         </label>
-        <span className="top-reference">{passage?.name ?? "Opening Bible"}</span>
-        <nav className="compact-navigation" aria-label="Chapter navigation">
+        <span className="top-reference">{passage?.name ?? t("openingBible")}</span>
+        <nav className="compact-navigation" aria-label={t("chapterNavigation")}>
           <button
             type="button"
             disabled={!canGoPrevious}
-            aria-label="Previous chapter"
+            aria-label={t("previousChapter")}
             onClick={() => void turn(-1)}
           >
             ‹
@@ -932,49 +975,50 @@ export default function Home() {
           <button
             type="button"
             disabled={!canGoNext}
-            aria-label="Next chapter"
+            aria-label={t("nextChapter")}
             onClick={() => void turn(1)}
           >
             ›
           </button>
         </nav>
-        <button className="markdown-button" type="button" aria-label={markdownMode ? "Return to Bible reader" : "Open chapter as Markdown"} aria-pressed={markdownMode} onClick={() => { setMarkdownMode((current) => !current); setMarkdownMessage(""); }}>
+        <button className="markdown-button" type="button" aria-label={t(markdownMode ? "returnToReader" : "openAsMarkdown")} aria-pressed={markdownMode} onClick={() => { setMarkdownMode((current) => !current); setMarkdownMessage(""); }}>
           <svg viewBox="0 0 24 12" aria-hidden="true"><circle cx="6" cy="6" r="4" /><circle cx="18" cy="6" r="4" /><path d="M10 6h4M2 4 0 2m22 2 2-2" /></svg>
         </button>
         <button
           className="markings-button"
           type="button"
+          data-mobile-label={t("study")}
           aria-expanded={drawer === "markings"}
           onClick={() => setDrawer(drawer === "markings" ? null : "markings")}
         >
-          Study
+          {t("study")}
         </button>
         {themeMode === "manual" ? <button className="theme-button" type="button" onClick={changeTheme}>
-          {dark ? "Light" : "Dark"}
+          {t(dark ? "light" : "dark")}
         </button> : null}
       </header>
 
-      {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label="Search Bible">
+      {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label={t("searchBible")}>
         <div className="search-heading">
-          <div><strong>Search {translation?.abbreviation.toUpperCase()}</strong><small>{searchCorpusKey ? `${searchCorpus.length.toLocaleString()} verses ready offline` : "The whole translation is cached for fast searching"}</small></div>
-          <button type="button" aria-label="Close search" onClick={() => { searchScanId.current += 1; setSearchRunning(false); setSearchOpen(false); }}>×</button>
+          <div><strong>{t("searchTranslation", { translation: translation?.abbreviation.toUpperCase() ?? "" })}</strong><small>{searchCorpusKey ? t("versesReadyOffline", { count: searchCorpus.length.toLocaleString(locale) }) : t("wholeTranslationCached")}</small></div>
+          <button type="button" aria-label={t("closeSearch")} onClick={() => { searchScanId.current += 1; setSearchRunning(false); setSearchOpen(false); }}>×</button>
         </div>
         <label className="search-query">
-          <span className="sr-only">Search this translation</span>
-          <input autoFocus type="search" value={searchQuery} placeholder="Search the Bible" onChange={(event) => restartSearch(event.target.value)} />
+          <span className="sr-only">{t("searchThisTranslation")}</span>
+          <input autoFocus type="search" value={searchQuery} placeholder={t("searchTheBible")} onChange={(event) => restartSearch(event.target.value)} />
         </label>
         <div className="search-filters">
-          <label><span>Words</span><select value={searchWords} onChange={(event) => setSearchWords(event.target.value as WordMode)}>
-            <option value="all">All words</option><option value="any">Any word</option><option value="phrase">Exact phrase</option>
+          <label><span>{t("words")}</span><select value={searchWords} onChange={(event) => setSearchWords(event.target.value as WordMode)}>
+            <option value="all">{t("allWords")}</option><option value="any">{t("anyWord")}</option><option value="phrase">{t("exactPhrase")}</option>
           </select></label>
-          <label><span>Match</span><select value={searchMatch} onChange={(event) => setSearchMatch(event.target.value as MatchMode)}>
-            <option value="exact">Exact word</option><option value="partial">Partial word</option>
+          <label><span>{t("match")}</span><select value={searchMatch} onChange={(event) => setSearchMatch(event.target.value as MatchMode)}>
+            <option value="exact">{t("exactWord")}</option><option value="partial">{t("partialWord")}</option>
           </select></label>
-          <label><span>Case</span><select value={searchCaseSensitive ? "sensitive" : "insensitive"} onChange={(event) => setSearchCaseSensitive(event.target.value === "sensitive")}>
-            <option value="insensitive">Insensitive</option><option value="sensitive">Sensitive</option>
+          <label><span>{t("case")}</span><select value={searchCaseSensitive ? "sensitive" : "insensitive"} onChange={(event) => setSearchCaseSensitive(event.target.value === "sensitive")}>
+            <option value="insensitive">{t("insensitive")}</option><option value="sensitive">{t("sensitive")}</option>
           </select></label>
-          <label><span>Where</span><select value={searchScope} onChange={(event) => setSearchScope(event.target.value as SearchScope)}>
-            <option value="all">Whole Bible</option><option value="ot">Old Testament</option><option value="nt">New Testament</option>
+          <label><span>{t("where")}</span><select value={searchScope} onChange={(event) => setSearchScope(event.target.value as SearchScope)}>
+            <option value="all">{t("wholeBible")}</option><option value="ot">{t("oldTestament")}</option><option value="nt">{t("newTestament")}</option>
             {books.map((book) => <option key={book.nr} value={`book:${book.nr}`}>{book.name}</option>)}
           </select></label>
         </div>
@@ -982,55 +1026,55 @@ export default function Home() {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 180) loadMoreSearchResults();
         }}>
-          {!searchQuery.trim() ? <p className="search-prompt">Type a word or phrase to search the current translation.</p> : searchError ? <p className="search-error">{searchError}</p> : searchLoading || searchNeedsInitialization ? <div className="search-initializing"><i /><strong>Initializing search</strong><span>Downloading and indexing {translation?.translation} once.</span></div> : <>
-            <p className="search-count">{searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"} loaded{searchComplete ? " · end of results" : " · scroll for more"}</p>
+          {!searchQuery.trim() ? <p className="search-prompt">{t("searchPrompt")}</p> : searchError ? <p className="search-error">{searchError}</p> : searchLoading || searchNeedsInitialization ? <div className="search-initializing"><i /><strong>{t("initializingSearch")}</strong><span>{t("downloadingTranslation", { translation: translation?.translation ?? "" })}</span></div> : <>
+            <p className="search-count">{countMessage(searchResults.length, "resultLoaded", "resultsLoaded")} · {t(searchComplete ? "endOfResults" : "scrollForMore")}</p>
             {searchResults.length ? <ol>{searchResults.map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
               setSearchArrival({ book: result.book, chapter: result.chapter, verse: result.verse, query: searchQuery, match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang, token: Date.now() });
               setPendingVerse(result.verse);
               go({ translation: route.translation, book: result.book, chapter: result.chapter }, false, result.bookName);
               setSearchOpen(false);
-            }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : searchRunning ? <div className="search-more"><i />Searching…</div> : <p className="search-prompt">No verses match these filters.</p>}
-            {searchRunning && searchResults.length ? <div className="search-more"><i />Loading more results</div> : null}
+            }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : searchRunning ? <div className="search-more"><i />{t("searching")}</div> : <p className="search-prompt">{t("noSearchResults")}</p>}
+            {searchRunning && searchResults.length ? <div className="search-more"><i />{t("loadingMoreResults")}</div> : null}
           </>}
         </div>
       </section> : null}
 
       {infoModal ? <div className="info-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setInfoModal(null); }}>
-        <section className="info-modal" role="dialog" aria-modal="true" aria-label={infoModal === "translation" ? "Translation details" : "How getBible is maintained"}>
+        <section className="info-modal" role="dialog" aria-modal="true" aria-label={infoModal === "translation" ? t("translationDetails") : t("howMaintained", { getBible: "getBible" })}>
           <header className="info-modal-header">
             <div>
               <h2>{infoModal === "translation" && translation
                 ? `${translation.translation} (${translation.abbreviation.toUpperCase()}${translation.distribution_version ? ` - ${translation.distribution_version}` : ""})`
-                : "How getBible stays synchronized"}</h2>
-              {infoModal === "translation" && translation?.distribution_version_date ? <p>Last updated: {translation.distribution_version_date}</p> : null}
+                : t("howSynchronized", { getBible: "getBible" })}</h2>
+              {infoModal === "translation" && translation?.distribution_version_date ? <p>{t("lastUpdated", { date: translation.distribution_version_date })}</p> : null}
             </div>
-            <button type="button" aria-label="Close information" onClick={() => setInfoModal(null)}>×</button>
+            <button type="button" aria-label={t("closeInformation")} onClick={() => setInfoModal(null)}>×</button>
           </header>
           <div className="info-modal-body">
             {infoModal === "translation" && translation ? <>
               <dl className="translation-facts">
                 {translationFacts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
               </dl>
-              {translation.description ? <section><h3>Description</h3><p>{translation.description}</p></section> : null}
-              {translation.distribution_about ? <section><h3>About and contact information</h3><p className="preserve-lines">{distributionText(translation.distribution_about)}</p></section> : null}
-              {translation.distribution_license ? <section><h3>License</h3><p>{translation.distribution_license}</p></section> : null}
-              {translation.distribution_sourcetype || translation.distribution_source ? <section><h3>Source</h3>
+              {translation.description ? <section><h3>{t("description")}</h3><p>{translation.description}</p></section> : null}
+              {translation.distribution_about ? <section><h3>{t("aboutAndContact")}</h3><p className="preserve-lines">{distributionText(translation.distribution_about)}</p></section> : null}
+              {translation.distribution_license ? <section><h3>{t("license")}</h3><p>{translation.distribution_license}</p></section> : null}
+              {translation.distribution_sourcetype || translation.distribution_source ? <section><h3>{t("source")}</h3>
                 {translation.distribution_sourcetype ? <p>{translation.distribution_sourcetype}</p> : null}
                 {translation.distribution_source ? <a href={translation.distribution_source} target="_blank" rel="noreferrer">{translation.distribution_source}</a> : null}
               </section> : null}
-              {translation.url ? <section><h3>GetBible API resource</h3><a href={translation.url} target="_blank" rel="noreferrer">{translation.url}</a></section> : null}
-              {translationHistory.length ? <section><h3>Translation history</h3><ol className="translation-history">
+              {translation.url ? <section><h3>{t("apiResource", { getBible: "getBible" })}</h3><a href={translation.url} target="_blank" rel="noreferrer">{translation.url}</a></section> : null}
+              {translationHistory.length ? <section><h3>{t("translationHistory")}</h3><ol className="translation-history">
                 {translationHistory.map(([version, description]) => <li key={version}><strong>{version.replace(/^history_/, "")}</strong><span>{description}</span></li>)}
               </ol></section> : null}
             </> : <div className="sync-information">
-              <p>At <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, we&apos;ve established a robust system to keep our API synchronized with the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> project&apos;s <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a>. Let me explain how this integration works in simple terms.</p>
-              <p>We source our Bible text directly from the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a>. To monitor any updates, we generate “hash values” for each chapter, book, and translation. These hash values serve as unique identifiers that change only when the underlying content changes, thereby ensuring a tight integration between <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a> and the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> modules.</p>
-              <p>Every month, an automated process runs for approximately three hours. During this window, we fetch the latest Bible text from the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> modules. Subsequently, we compare the new hash values and the text with the previous ones. Any detected changes trigger updates to both our <a href="https://git.vdm.dev/getBible/v2" target="_blank" rel="noreferrer">official getBible hash repository</a> and the <a href="https://api.getbible.net" target="_blank" rel="noreferrer">Bible API</a> for all affected <a href="https://api.getbible.net/v2/translations.json" target="_blank" rel="noreferrer">translations</a>. This system has been operating seamlessly for several years.</p>
-              <p>Once the updates are complete, any application utilizing our <a href="https://api.getbible.net" target="_blank" rel="noreferrer">Bible API</a> should monitor the <a href="https://getbible.life/docs#mapping-helpers" target="_blank" rel="noreferrer">hash values</a> at the chapter, book, or translation level. Spotting a change in these values indicates that they should update their respective systems.</p>
-              <p>Hash values can change due to various reasons, including textual corrections like adding omitted verses, rectifying spelling errors, or addressing any discrepancies flagged by the publishers maintaining the <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a> at <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a>.</p>
-              <p>The <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> initiative, also known as the SWORD Project, is the “source of truth” for <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">getBible</a>. Any modifications in the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a> get reflected in our API within days, ensuring our users access the most precise and current Bible text. We pledge to uphold this standard as long as <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a> exists and our build scripts remain operational.</p>
-              <p>We&apos;re united in our mission to preserve the integrity and authenticity of the Bible text. If you have questions or require additional information, please use our <a href="https://git.vdm.dev/getBible/support" target="_blank" rel="noreferrer">support system</a>. We&apos;re here to assist and will respond promptly.</p>
-              <p>Thank you for your understanding and for being an integral part of the <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a> community.</p>
+              <p>{rich("syncParagraph1", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
+              <p>{rich("syncParagraph2", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
+              <p>{rich("syncParagraph3", { crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, hashRepository: <a href="https://git.vdm.dev/getBible/v2" target="_blank" rel="noreferrer">{t("officialHashRepository")}</a>, bibleApi: <a href="https://api.getbible.net" target="_blank" rel="noreferrer">{t("bibleApi")}</a>, translations: <a href="https://api.getbible.net/v2/translations.json" target="_blank" rel="noreferrer">{t("translationsLabel")}</a> })}</p>
+              <p>{rich("syncParagraph4", { bibleApi: <a href="https://api.getbible.net" target="_blank" rel="noreferrer">{t("bibleApi")}</a>, hashValues: <a href="https://getbible.life/docs#mapping-helpers" target="_blank" rel="noreferrer">{t("hashValues")}</a> })}</p>
+              <p>{rich("syncParagraph5", { modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a> })}</p>
+              <p>{rich("syncParagraph6", { crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, getBible: <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">getBible</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
+              <p>{rich("syncParagraph7", { supportSystem: <a href="https://git.vdm.dev/getBible/support" target="_blank" rel="noreferrer">{t("supportSystem")}</a> })}</p>
+              <p>{rich("syncParagraph8", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a> })}</p>
             </div>}
           </div>
         </section>
@@ -1039,15 +1083,15 @@ export default function Home() {
       <button
         className="drawer-scrim"
         type="button"
-        aria-label="Close menu"
+        aria-label={t("closeMenu")}
         tabIndex={drawer ? 0 : -1}
         onClick={() => setDrawer(null)}
       />
 
       <aside className={`drawer ${drawer ? "visible" : ""}`} aria-hidden={!drawer}>
         <div className="drawer-header">
-          <strong>{drawer === "markings" ? "Study" : "Choose passage"}</strong>
-          <button type="button" aria-label="Close menu" onClick={() => setDrawer(null)}>
+          <strong>{t(drawer === "markings" ? "study" : "choosePassage")}</strong>
+          <button type="button" aria-label={t("closeMenu")} onClick={() => setDrawer(null)}>
             ‹
           </button>
         </div>
@@ -1055,7 +1099,7 @@ export default function Home() {
         {drawer === "reader" ? (
           <div className="drawer-content">
             <label className="field">
-              <span>Translation</span>
+              <span>{t("translation")}</span>
               <select
                 value={route.translation}
                 disabled={!translations.length}
@@ -1065,14 +1109,14 @@ export default function Home() {
               >
                 {translations.map((item) => (
                   <option value={item.abbreviation} key={item.abbreviation}>
-                    {translationLanguage(item)} · {item.translation}
+                    {localizedLanguageName(item, locale)} · {item.translation}
                   </option>
                 ))}
               </select>
             </label>
             <div className="field-row">
               <label className="field">
-                <span>Book</span>
+                <span>{t("book")}</span>
                 <select
                   value={route.book}
                   disabled={!books.length}
@@ -1089,7 +1133,7 @@ export default function Home() {
                 </select>
               </label>
               <label className="field chapter-field">
-                <span>Chapter</span>
+                <span>{t("chapter")}</span>
                 <select
                   value={route.chapter}
                   disabled={!chapters.length}
@@ -1106,7 +1150,7 @@ export default function Home() {
               </label>
             </div>
 
-            <div className="chapter-grid" aria-label="Chapters">
+            <div className="chapter-grid" aria-label={t("chapters")}>
               {chapters.map((item) => (
                 <button
                   type="button"
@@ -1121,16 +1165,16 @@ export default function Home() {
             </div>
 
             <details className="reader-options">
-              <summary>Reader options</summary>
+              <summary>{t("readerOptions")}</summary>
               <label className="field">
-                <span>Appearance control</span>
+                <span>{t("appearanceControl")}</span>
                 <select value={themeMode} onChange={(event) => changeThemeMode(event.target.value === "manual" ? "manual" : "system")}>
-                  <option value="system">Follow system</option>
-                  <option value="manual">Manual</option>
+                  <option value="system">{t("followSystem")}</option>
+                  <option value="manual">{t("manual")}</option>
                 </select>
               </label>
               <label className="field">
-                <span>Text size</span>
+                <span>{t("textSize")}</span>
                 <select
                   value={textSize}
                   onChange={(event) => changeTextSize(Number(event.target.value))}
@@ -1143,65 +1187,65 @@ export default function Home() {
                 </select>
               </label>
               <label className="field">
-                <span>Reading font</span>
+                <span>{t("readingFont")}</span>
                 <select value={readerFont} onChange={(event) => {
                   setReaderFont(event.target.value);
                   localStorage.setItem(READER_FONT, event.target.value);
                 }}>
-                  {READER_FONTS.map((font) => <option value={font.id} key={font.id}>{font.name}</option>)}
+                  {READER_FONTS.map((font) => <option value={font.id} key={font.id}>{({ serif: t("classicSerif"), book: t("bookSerif"), sans: t("cleanSans"), system: t("systemSans") } as Record<string, string>)[font.id] ?? font.name}</option>)}
                 </select>
               </label>
               <label className="field">
-                <span>Reading width</span>
+                <span>{t("readingWidth")}</span>
                 <select value={readingWidth} onChange={(event) => {
                   const value = normalizeReadingWidth(event.target.value);
                   setReadingWidth(value);
                   localStorage.setItem(READING_WIDTH, value);
                 }}>
-                  <option value="page">Page</option>
-                  <option value="full">Full screen width</option>
+                  <option value="page">{t("page")}</option>
+                  <option value="full">{t("fullScreenWidth")}</option>
                 </select>
               </label>
               <label className="field">
-                <span>Verse layout</span>
+                <span>{t("verseLayout")}</span>
                 <select value={layout} onChange={(event) => {
                   const value = readerLayout(event.target.value);
                   setLayout(value);
                   localStorage.setItem(READER_LAYOUT, value);
                 }}>
-                  <option value="lines">One verse per line</option>
-                  <option value="paragraph">Continuous paragraph</option>
+                  <option value="lines">{t("oneVersePerLine")}</option>
+                  <option value="paragraph">{t("continuousParagraph")}</option>
                 </select>
               </label>
               <label className="field">
-                <span>Light appearance</span>
+                <span>{t("lightAppearance")}</span>
                 <select value={lightPalette} onChange={(event) => {
                   setLightPalette(event.target.value);
                   document.documentElement.dataset.palette = event.target.value;
                   localStorage.setItem(LIGHT_PALETTE, event.target.value);
                 }}>
-                  {LIGHT_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{palette.name}</option>)}
+                  {LIGHT_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{({ white: t("pureWhite"), paper: t("warmPaper"), ivory: t("softIvory"), mist: t("coolMist") } as Record<string, string>)[palette.id] ?? palette.name}</option>)}
                 </select>
               </label>
               <label className="field">
-                <span>Dark appearance</span>
+                <span>{t("darkAppearance")}</span>
                 <select value={darkPalette} onChange={(event) => {
                   setDarkPalette(event.target.value);
                   document.documentElement.dataset.darkPalette = event.target.value;
                   localStorage.setItem(DARK_PALETTE, event.target.value);
                 }}>
-                  {DARK_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{palette.name}</option>)}
+                  {DARK_PALETTES.map((palette) => <option value={palette.id} key={palette.id}>{({ black: t("pureBlack"), brown: t("warmBrown"), charcoal: t("softCharcoal"), navy: t("midnightBlue") } as Record<string, string>)[palette.id] ?? palette.name}</option>)}
                 </select>
               </label>
               <p className="cache-status">
-                {verified ? "Content hash verified" : "Showing saved content"}
+                {t(verified ? "contentHashVerified" : "showingSavedContent")}
               </p>
               <button
                 className="plain-action"
                 type="button"
                 onClick={() => void clearAllLocalData()}
               >
-                Clear all local data
+                {t("clearAllLocalData")}
               </button>
             </details>
           </div>
@@ -1210,11 +1254,11 @@ export default function Home() {
         {drawer === "markings" ? (
           <div className="drawer-content markings-panel">
             <p className="drawer-help">
-              Keep long-term markings and verse notes in this browser.
+              {t("studyHelp")}
             </p>
-            <div className="study-tabs" role="tablist" aria-label="Study tools">
-              <button type="button" role="tab" aria-selected={studyTab === "markings"} onClick={() => setStudyTab("markings")}>Markings <span>{markings.length}</span></button>
-              <button type="button" role="tab" aria-selected={studyTab === "notes"} onClick={() => setStudyTab("notes")}>Notes <span>{notes.length}</span></button>
+            <div className="study-tabs" role="tablist" aria-label={t("studyTools")}>
+              <button type="button" role="tab" aria-selected={studyTab === "markings"} onClick={() => setStudyTab("markings")}>{t("markings")} <span>{markings.length.toLocaleString(locale)}</span></button>
+              <button type="button" role="tab" aria-selected={studyTab === "notes"} onClick={() => setStudyTab("notes")}>{t("notes")} <span>{notes.length.toLocaleString(locale)}</span></button>
             </div>
             <input ref={importInput} className="file-input" type="file" accept="application/json,.json" onChange={(event) => {
               const file = event.target.files?.[0];
@@ -1222,29 +1266,29 @@ export default function Home() {
               event.target.value = "";
             }} />
             {studyTab === "markings" ? <>
-            <h2>{selectedColorId ? "Saved markings" : "Marking groups"}</h2>
+            <h2>{t(selectedColorId ? "savedMarkings" : "markingGroups")}</h2>
             {!selectedColorId && colors.length ? <>
               <label className="color-search group-search">
-                <span>Find a marking group</span>
-                <input type="search" value={colorSearch} placeholder={`Search ${colors.length} groups`} onChange={(event) => setColorSearch(event.target.value)} />
+                <span>{t("findMarkingGroup")}</span>
+                <input type="search" value={colorSearch} placeholder={t("searchGroups", { count: colors.length.toLocaleString(locale) })} onChange={(event) => setColorSearch(event.target.value)} />
               </label>
               <div className="marking-groups scalable">
                 {visibleColors.map((color) => {
                   const count = markings.filter((marking) => marking.colorId === color.id).length;
                   return <button className={color.id === activeColorId ? "active" : ""} type="button" key={color.id} onClick={() => selectMarkingGroup(color.id)}>
                     <span className="marking-dot" style={{ backgroundColor: color.value }} />
-                    <span><strong>{color.name}</strong><small>{count} marking{count === 1 ? "" : "s"}</small></span>
+                    <span><strong>{color.name}</strong><small>{countMessage(count, "oneMarking", "markingCount")}</small></span>
                     <b>›</b>
                   </button>;
                 })}
               </div>
-              {!visibleColors.length ? <p className="empty-markings">No marking groups match your search.</p> : null}
+              {!visibleColors.length ? <p className="empty-markings">{t("noMatchingGroups")}</p> : null}
             </> : selectedColorId ? <>
-              <button className="back-to-groups" type="button" onClick={() => setSelectedColorId(null)}>‹ All marking groups</button>
+              <button className="back-to-groups" type="button" onClick={() => setSelectedColorId(null)}>‹ {t("allMarkingGroups")}</button>
               <div className="selected-group-title">
                 <span className="marking-dot" style={{ backgroundColor: colorMap.get(selectedColorId)?.value }} />
                 <strong>{colorMap.get(selectedColorId)?.name}</strong>
-                <small>{sortedColorMarkings.length} marking{sortedColorMarkings.length === 1 ? "" : "s"} · Bible order</small>
+                <small>{countMessage(sortedColorMarkings.length, "oneMarking", "markingCount")} · {t("bibleOrder")}</small>
               </div>
               {sortedColorMarkings.length ? (
               <ul className="marking-list">
@@ -1262,15 +1306,15 @@ export default function Home() {
                           style={{ backgroundColor: color?.value }}
                         />
                         <span>
-                          <strong>{marking.reference ?? `Verse ${marking.verse}`}</strong>
+                          <strong>{marking.reference ?? t("verseNumber", { verse: marking.verse })}</strong>
                           <small>{marking.quote}</small>
-                          <em>{color?.name ?? "Marking"}</em>
+                          <em>{color?.name ?? t("marking")}</em>
                         </span>
                       </button>
                       <button
                         className="delete-marking"
                         type="button"
-                        aria-label={`Delete marking for ${marking.reference ?? marking.verse}`}
+                        aria-label={t("deleteMarkingFor", { reference: marking.reference ?? marking.verse })}
                         onClick={() =>
                           setMarkings((current) =>
                             current.filter((item) => item.id !== marking.id),
@@ -1283,13 +1327,13 @@ export default function Home() {
                   );
                 })}
               </ul>
-              ) : <p className="empty-markings">No markings in this group yet.</p>}
+              ) : <p className="empty-markings">{t("noMarkingsInGroup")}</p>}
             </> : (
-              <p className="empty-markings">No markings yet.</p>
+              <p className="empty-markings">{t("noMarkingsYet")}</p>
             )}
 
             <details className="color-section">
-              <summary>Manage group names and colors</summary>
+              <summary>{t("manageGroups")}</summary>
               <div className="color-manager scalable">
                 {visibleColors.map((color) => (
                   <div className="color-row" key={color.id}>
@@ -1297,53 +1341,53 @@ export default function Home() {
                       className={color.id === activeColorId ? "color-swatch active" : "color-swatch"}
                       type="button"
                       style={{ backgroundColor: color.value }}
-                      aria-label={`Use ${color.name}`}
-                      data-tooltip={`Use ${color.name}`}
+                      aria-label={t("useGroup", { name: color.name })}
+                      data-tooltip={t("useGroup", { name: color.name })}
                       onClick={() => setActiveColorId(color.id)}
                     />
-                    <input aria-label={`${color.name} color`} type="color" value={color.value} onChange={(event) => updateColor(color.id, { value: event.target.value })} />
-                    <input aria-label="Color name" type="text" value={color.name} onChange={(event) => updateColor(color.id, { name: event.target.value })} />
-                    <button className="remove-color" type="button" disabled={colors.length === 1} aria-label={`Remove ${color.name}`} onClick={() => removeColor(color.id)}>×</button>
+                    <input aria-label={t("groupColor", { name: color.name })} type="color" value={color.value} onChange={(event) => updateColor(color.id, { value: event.target.value })} />
+                    <input aria-label={t("colorName")} type="text" value={color.name} onChange={(event) => updateColor(color.id, { name: event.target.value })} />
+                    <button className="remove-color" type="button" disabled={colors.length === 1} aria-label={t("removeGroup", { name: color.name })} onClick={() => removeColor(color.id)}>×</button>
                   </div>
                 ))}
               </div>
-              <button className="add-color" type="button" onClick={addColor}>Add color</button>
+              <button className="add-color" type="button" onClick={addColor}>{t("addColor")}</button>
             </details>
 
             <section className="backup-section">
-              <h2>Backup and reset</h2>
+              <h2>{t("backupAndReset")}</h2>
               <div className="marking-actions">
-                <button type="button" onClick={exportMarkings} disabled={!markings.length && !notes.length}>Export</button>
-                <button type="button" onClick={() => importInput.current?.click()}>Import and merge</button>
-                <button className="danger-action" type="button" onClick={deleteAllMarkings} disabled={!markings.length}>Delete all</button>
+                <button type="button" onClick={exportMarkings} disabled={!markings.length && !notes.length}>{t("export")}</button>
+                <button type="button" onClick={() => importInput.current?.click()}>{t("importAndMerge")}</button>
+                <button className="danger-action" type="button" onClick={deleteAllMarkings} disabled={!markings.length}>{t("deleteAll")}</button>
               </div>
               {markingMessage ? <p className="marking-message" role="status">{markingMessage}</p> : null}
             </section>
             </> : <>
-              <h2>Verse notes</h2>
+              <h2>{t("verseNotes")}</h2>
               {sortedNotes.length ? <ul className="note-list">
                 {sortedNotes.map((note) => <li key={note.id}>
                   <button type="button" className="note-link" onClick={() => openSavedNote(note)}>
                     <strong>{note.reference}</strong>
                     <span>{note.text}</span>
                   </button>
-                  <button type="button" className="edit-note" aria-label={`Edit note for ${note.reference}`} onClick={() => {
+                  <button type="button" className="edit-note" aria-label={t("editNoteFor", { reference: note.reference })} onClick={() => {
                     setDrawer(null);
                     setPendingVerse(note.verse);
                     if (!noteMatchesPassage(note, route)) go({ ...note.passage, translation: route.translation });
                     window.setTimeout(() => setNoteEditor({ verse: note.verse, reference: note.reference, text: note.text }), 100);
-                  }}>Edit</button>
-                  <button type="button" className="delete-marking" aria-label={`Delete note for ${note.reference}`} onClick={() => {
-                    if (window.confirm(`Delete the note for ${note.reference}?`)) setNotes((current) => current.filter((item) => item.id !== note.id));
+                  }}>{t("edit")}</button>
+                  <button type="button" className="delete-marking" aria-label={t("deleteNoteFor", { reference: note.reference })} onClick={() => {
+                    if (window.confirm(t("deleteNoteFor", { reference: note.reference }))) setNotes((current) => current.filter((item) => item.id !== note.id));
                   }}>×</button>
                 </li>)}
-              </ul> : <p className="empty-markings">No verse notes yet. Use “Note” beside any verse to add one.</p>}
+              </ul> : <p className="empty-markings">{t("noVerseNotes")}</p>}
 
               <section className="backup-section">
-                <h2>Backup and reset</h2>
+                <h2>{t("backupAndReset")}</h2>
                 <div className="marking-actions">
-                  <button type="button" onClick={exportMarkings} disabled={!markings.length && !notes.length}>Export</button>
-                  <button type="button" onClick={() => importInput.current?.click()}>Import and merge</button>
+                  <button type="button" onClick={exportMarkings} disabled={!markings.length && !notes.length}>{t("export")}</button>
+                  <button type="button" onClick={() => importInput.current?.click()}>{t("importAndMerge")}</button>
                 </div>
                 {markingMessage ? <p className="marking-message" role="status">{markingMessage}</p> : null}
               </section>
@@ -1355,27 +1399,27 @@ export default function Home() {
       <section className="reading-stage" data-reading-width={readingWidth}>
         {error ? (
           <div className="state" role="alert">
-            <strong>Unable to open this passage</strong>
+            <strong>{t("unableToOpen")}</strong>
             <p>{error}</p>
             <button type="button" onClick={() => setRoute({ ...route })}>
-              Try again
+              {t("tryAgain")}
             </button>
           </div>
         ) : loading || !passage ? (
           <div className="state loading" aria-busy="true">
-            <span>Loading passage</span>
+            <span>{t("loadingPassage")}</span>
             <i />
             <i />
             <i />
             <i />
           </div>
         ) : markdownMode ? (
-          <section className="markdown-view" aria-label={`${passage.name} Markdown`}>
+          <section className="markdown-view" aria-label={`${passage.name} ${t("markdown")}`}>
             <header>
-              <div><strong>{passage.name}</strong><span>One verse per line</span></div>
-              <div><button type="button" onClick={() => void copyMarkdown()}>Copy</button><button type="button" onClick={downloadMarkdown}>Download .md</button></div>
+              <div><strong>{passage.name}</strong><span>{t("oneVersePerLine")}</span></div>
+              <div><button type="button" onClick={() => void copyMarkdown()}>{t("copy")}</button><button type="button" onClick={downloadMarkdown}>{t("downloadMarkdown")}</button></div>
             </header>
-            <textarea readOnly spellCheck={false} value={chapterMarkdown(passage, { translationName: translation?.translation, copyrightNotice: translation?.distribution_license })} aria-label={`${passage.name} plain Markdown text`} />
+            <textarea readOnly spellCheck={false} value={chapterMarkdown(passage, { translationName: translation?.translation, copyrightNotice: translation?.distribution_license })} aria-label={`${passage.name} ${t("markdown")}`} />
             {markdownMessage ? <p role="status">{markdownMessage}</p> : null}
           </section>
         ) : (
@@ -1425,11 +1469,11 @@ export default function Home() {
             <header className="passage-line">
               <strong>{passage.name}</strong>
               <span>{translation?.abbreviation.toUpperCase()}</span>
-              <button className="verification-button" type="button" aria-expanded={verifiedInfo} onClick={() => setVerifiedInfo((current) => !current)}>{verified ? "verified" : "saved"}</button>
+              <button className="verification-button" type="button" aria-expanded={verifiedInfo} onClick={() => setVerifiedInfo((current) => !current)}>{t(verified ? "verified" : "saved")}</button>
             </header>
             {verifiedInfo ? <div className="verification-info" role="note">
-              {verified ? "Verified means this chapter’s hash is in sync with the CrossWire source modules used by the GetBible API." : "Saved means this chapter is being shown from your browser cache and could not currently be checked against the CrossWire source modules."}
-              <button type="button" aria-label="Close verification explanation" onClick={() => setVerifiedInfo(false)}>×</button>
+              {t(verified ? "verifiedExplanation" : "savedExplanation")}
+              <button type="button" aria-label={t("closeVerification")} onClick={() => setVerifiedInfo(false)}>×</button>
             </div> : null}
 
             <ol className={`verses ${layout === "paragraph" ? "verses-paragraph" : "verses-lines"}`} data-layout={layout}>
@@ -1460,8 +1504,8 @@ export default function Home() {
                     <button
                       className="verse-number"
                       type="button"
-                      aria-label={`Choose marking color for ${reference}`}
-                      title="Choose a color for this verse"
+                      aria-label={t("chooseMarkingFor", { reference })}
+                      title={t("chooseColorForVerse")}
                       onClick={() => chooseVerseMarking(verse.verse, verse.text, reference)}
                     >
                       {verse.verse}
@@ -1495,8 +1539,8 @@ export default function Home() {
                         );
                       })}
                     </span>
-                    {verseNote ? <button className="inline-note" type="button" onClick={() => openNote(verse.verse, reference)} aria-label={`Edit note for ${reference}`}>
-                      <span>Note</span>
+                    {verseNote ? <button className="inline-note" type="button" onClick={() => openNote(verse.verse, reference)} aria-label={t("editNoteFor", { reference })}>
+                      <span>{t("note")}</span>
                       <p>{verseNote.text}</p>
                     </button> : null}
                   </li>
@@ -1514,38 +1558,38 @@ export default function Home() {
       </section>
 
       {passage ? <footer className="site-footer">
-        <span className="site-footer-life"><a href={getBibleLifeUrl(route, passage.book_name)}>getBible.Life</a> <span>The words of eternal life</span></span>
-        <span className="maintenance-credit">Lovingly maintained by <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">Vast Development Method</a> <button className="site-footer-heart" type="button" aria-label="How getBible is lovingly maintained" aria-haspopup="dialog" onClick={() => setInfoModal("sync")}>♥</button></span>
+        <span className="site-footer-life"><a href={getBibleLifeUrl(route, passage.book_name)}>getBible.Life</a> <span>{t("wordsOfEternalLife")}</span></span>
+        <span className="maintenance-credit">{t("lovinglyMaintainedBy")} <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">Vast Development Method</a> <button className="site-footer-heart" type="button" aria-label={t("howLovinglyMaintained", { getBible: "getBible" })} aria-haspopup="dialog" onClick={() => setInfoModal("sync")}>♥</button></span>
       </footer> : null}
 
       {textSelection || wholeVerseSelection ? (
-        <div className="selection-toolbar" role="dialog" aria-label="Mark selected text">
-          <span>{textSelection ? `Mark “${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}”` : `Mark ${wholeVerseSelection?.reference}`}</span>
+        <div className="selection-toolbar" role="dialog" aria-label={t("markSelectedText")}>
+          <span>{textSelection ? t("markQuote", { quote: `${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}` }) : t("markReference", { reference: wholeVerseSelection?.reference ?? "" })}</span>
           <div>
             {colorMap.get(activeColorId) ? <button className="selection-active-group" type="button" onClick={() => applySelectionColor(activeColorId)}>
               <i style={{ backgroundColor: colorMap.get(activeColorId)?.value }} />
               <span>{colorMap.get(activeColorId)?.name}</span>
             </button> : null}
             <label className="selection-group-picker">
-              <span className="sr-only">Choose another marking group</span>
+              <span className="sr-only">{t("chooseAnotherGroup")}</span>
               <select value="" onChange={(event) => event.target.value && applySelectionColor(event.target.value)}>
-                <option value="" disabled>More groups…</option>
+                <option value="" disabled>{t("moreGroups")}</option>
                 {colors.filter((color) => color.id !== activeColorId).map((color) => <option value={color.id} key={color.id}>{color.name}</option>)}
               </select>
             </label>
-            {wholeVerseSelection ? <button className="selection-none" type="button" aria-label={`Remove whole-verse color from ${wholeVerseSelection.reference}`} title="No whole-verse color" onClick={() => {
+            {wholeVerseSelection ? <button className="selection-none" type="button" aria-label={t("removeWholeVerseColor", { reference: wholeVerseSelection.reference })} title={t("noWholeVerseColor")} onClick={() => {
               setMarkings((current) => withoutWholeVerseMarking(current, route, wholeVerseSelection.verse));
               setWholeVerseSelection(null);
-            }}><i />None</button> : null}
+            }}><i />{t("none")}</button> : null}
             {wholeVerseSelection ? <button className="add-note-from-palette" type="button" onClick={() => {
               const selection = wholeVerseSelection;
               setWholeVerseSelection(null);
               openNote(selection.verse, selection.reference);
-            }}>{notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "Edit note" : "Add note"}</button> : null}
+            }}>{t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")}</button> : null}
             <button
               className="cancel-selection"
               type="button"
-              aria-label="Cancel marking"
+              aria-label={t("cancelMarking")}
               onClick={() => {
                 setTextSelection(null);
                 setWholeVerseSelection(null);
@@ -1558,29 +1602,29 @@ export default function Home() {
         </div>
       ) : null}
 
-      {noteEditor ? <div className="note-editor" role="dialog" aria-modal="true" aria-label={`Note for ${noteEditor.reference}`}>
-        <div className="note-editor-header"><strong>{noteEditor.reference}</strong><button type="button" aria-label="Close note editor" onClick={() => setNoteEditor(null)}>×</button></div>
-        <textarea autoFocus value={noteEditor.text} placeholder="Write your note…" onChange={(event) => setNoteEditor({ ...noteEditor, text: event.target.value })} />
+      {noteEditor ? <div className="note-editor" role="dialog" aria-modal="true" aria-label={t("noteFor", { reference: noteEditor.reference })}>
+        <div className="note-editor-header"><strong>{noteEditor.reference}</strong><button type="button" aria-label={t("closeNoteEditor")} onClick={() => setNoteEditor(null)}>×</button></div>
+        <textarea autoFocus value={noteEditor.text} placeholder={t("writeYourNote")} onChange={(event) => setNoteEditor({ ...noteEditor, text: event.target.value })} />
         <div className="note-editor-actions">
           {notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: noteEditor.verse })) ? <button className="delete-note" type="button" onClick={() => {
-            if (window.confirm(`Delete the note for ${noteEditor.reference}?`)) {
+            if (window.confirm(t("deleteNoteFor", { reference: noteEditor.reference }))) {
               const key = noteKey({ passage: route, verse: noteEditor.verse });
               setNotes((current) => current.filter((note) => noteKey(note) !== key));
               setNoteEditor(null);
             }
-          }}>Delete</button> : null}
-          <button type="button" onClick={() => setNoteEditor(null)}>Cancel</button>
-          <button className="save-note" type="button" disabled={!noteEditor.text.trim()} onClick={saveNote}>Save note</button>
+          }}>{t("delete")}</button> : null}
+          <button type="button" onClick={() => setNoteEditor(null)}>{t("cancel")}</button>
+          <button className="save-note" type="button" disabled={!noteEditor.text.trim()} onClick={saveNote}>{t("saveNote")}</button>
         </div>
       </div> : null}
 
-      <nav className="mobile-navigation" aria-label="Chapter navigation">
+      <nav className="mobile-navigation" aria-label={t("chapterNavigation")}>
         <button type="button" disabled={!canGoPrevious} onClick={() => void turn(-1)}>
-          Previous
+          {t("previous")}
         </button>
-        <span>{passage?.name ?? "Loading"}</span>
+        <span>{passage?.name ?? t("loading")}</span>
         <button type="button" disabled={!canGoNext} onClick={() => void turn(1)}>
-          Next
+          {t("next")}
         </button>
       </nav>
     </main>

@@ -30,6 +30,7 @@
     "typecheck": "tsc -p tsconfig.ci.json",
     "test:unit": "node --experimental-strip-types --test tests/*.test.ts",
     "test:render": "node --test tests/rendered-html.test.mjs",
+    "i18n:generate": "node --import tsx scripts/generate-ui-locales.mjs",
     "test": "npm run test:unit && npm run build && npm run test:render",
     "ci": "npm run lint && npm run typecheck && npm test",
     "deploy": "bash scripts/deploy.sh",

@@ -1852,7 +1852,7 @@ summary:focus-visible {
   }
 
   .markings-button::after {
-    content: "Study";
+    content: attr(data-mobile-label);
     font-size: 10px;
   }
 }

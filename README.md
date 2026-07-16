@@ -36,6 +36,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Sixty searchable starter marking groups with a compact large-list color picker and editable deployment colors.
 - Language-aware translation sorting with a CLDR-backed fallback when an API language name is absent.
 - Maintenance and CrossWire synchronization information available from the site footer.
+- The complete reader interface follows the selected Bible translation's language. Locale packs cover all 69 language identifiers currently exposed by the GetBible API, switch document direction for RTL languages, and preserve project names, scripture, API book names, and user-created study labels verbatim.
 
 ## API architecture
 
@@ -87,6 +88,20 @@ The application stores JSON responses in the browser Cache Storage API. Timestam
 ## Deployment marking groups
 
 Edit `config/reader.ts` to choose the initial marking names and colors for a deployment. Browser-customized color lists are preserved across deployments; the configured list is used for new installations or after local site data is cleared. The Markings drawer provides bounded scrolling and search when the configured list grows.
+
+## Interface localization
+
+English source messages live in `lib/i18n.ts`; generated, lazily loaded language packs live in `public/locales/`. The active interface locale is derived from the selected translation's API `lang` value—there is no separate locale preference to become out of sync with the Bible selection. Missing individual messages fall back to English, and historical or low-resource language identifiers without reliable machine-translation support use the complete English pack. Keeping packs as static per-language files avoids adding every language to the initial JavaScript bundle.
+
+To refresh locale coverage after adding or changing an English UI message:
+
+```bash
+npm run i18n:generate
+npm run typecheck
+npm run test:unit
+```
+
+The generator reads the live GetBible translation inventory, protects interpolation tokens and project names, and writes deterministic JSON locale data. Generated wording should be reviewed by native speakers before release. Never put scripture, API-provided book names, translation metadata content, or user-created marking names through the UI translator.
 
 ## License
 
