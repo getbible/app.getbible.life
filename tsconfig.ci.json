@@ -1,0 +1,14 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "allowImportingTsExtensions": true,
+    "incremental": false
+  },
+  "exclude": [
+    "node_modules",
+    "build",
+    "db",
+    "examples",
+    "worker"
+  ]
+}

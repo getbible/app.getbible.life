@@ -30,6 +30,10 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.
 - Translation, book, and chapter indexes refresh weekly. Changed upstream hashes invalidate only the affected cache branch.
 - The current translation license is displayed with the text.
+- Clickable translation credits with complete API metadata, licensing, source details, and version history.
+- Persistent reader layout switch between one verse per line and a continuous paragraph.
+- Language-aware translation sorting with a CLDR-backed fallback when an API language name is absent.
+- Maintenance and CrossWire synchronization information available from the site footer.
 
 ## API architecture
 
@@ -85,7 +89,7 @@ Edit `config/reader.ts` to choose the initial marking names and colors for a dep
 ## License
 
 Application code is released under the [GNU General Public License v3.0](LICENSE) and is maintained by Llewellyn van der Merwe of Vast Development Method. Bible translations retain their own upstream licenses, which the reader displays from each translation's API metadata.
-- Clickable translation credits with complete API metadata, licensing, source details, and version history
-- Persistent reader layout switch between one verse per line and a continuous paragraph
-- Language-aware translation sorting with a CLDR-backed fallback when an API language name is absent
-- Maintenance and CrossWire synchronization information available from the site footer
+
+## Contributing and continuous integration
+
+GitHub Actions validates every push and pull request with locked dependency installation, linting, TypeScript checking, unit tests, a production build, and rendered-route tests. See [CONTRIBUTING.md](CONTRIBUTING.md) for the local workflow and maintenance guidelines.
