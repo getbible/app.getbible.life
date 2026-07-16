@@ -50,7 +50,7 @@ import {
 } from "../lib/markings";
 import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyReference } from "../lib/daily";
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
-import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerStorageKeys } from "../lib/reader-state";
+import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance";
 import { flattenTranslation, highlightSearchText, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
@@ -66,6 +66,7 @@ const READER_FONT = "getbible-reader:font:v1";
 const LIGHT_PALETTE = "getbible-reader:light-palette:v1";
 const DARK_PALETTE = "getbible-reader:dark-palette:v1";
 const READING_WIDTH = "getbible-reader:reading-width:v1";
+const READER_LAYOUT = "getbible-reader:layout:v1";
 const NOTES = "getbible-reader:notes:v1";
 const LAST_READING = "getbible-reader:last-reading:v1";
 const DAILY_CACHE = "getbible-reader:daily:v1";
@@ -157,6 +158,7 @@ export default function Home() {
   const [lightPalette, setLightPalette] = useState("white");
   const [darkPalette, setDarkPalette] = useState("black");
   const [readingWidth, setReadingWidth] = useState<"page" | "full">("page");
+  const [layout, setLayout] = useState<ReaderLayout>("lines");
   const [colorSearch, setColorSearch] = useState("");
   const [verifiedInfo, setVerifiedInfo] = useState(false);
   const [markingMessage, setMarkingMessage] = useState("");
@@ -232,6 +234,7 @@ export default function Home() {
       setLightPalette(validPalette(LIGHT_PALETTES, savedPalette, "white"));
       setDarkPalette(validPalette(DARK_PALETTES, savedDarkPalette, "black"));
       setReadingWidth(localStorage.getItem(READING_WIDTH) === "full" ? "full" : "page");
+      setLayout(readerLayout(localStorage.getItem(READER_LAYOUT)));
       document.documentElement.dataset.palette = savedPalette;
       document.documentElement.dataset.darkPalette = savedDarkPalette;
       setColors(usableColors);
@@ -1140,6 +1143,17 @@ export default function Home() {
                 </select>
               </label>
               <label className="field">
+                <span>Verse layout</span>
+                <select value={layout} onChange={(event) => {
+                  const value = readerLayout(event.target.value);
+                  setLayout(value);
+                  localStorage.setItem(READER_LAYOUT, value);
+                }}>
+                  <option value="lines">One verse per line</option>
+                  <option value="paragraph">Continuous paragraph</option>
+                </select>
+              </label>
+              <label className="field">
                 <span>Light appearance</span>
                 <select value={lightPalette} onChange={(event) => {
                   setLightPalette(event.target.value);
@@ -1397,7 +1411,7 @@ export default function Home() {
               <button type="button" aria-label="Close verification explanation" onClick={() => setVerifiedInfo(false)}>×</button>
             </div> : null}
 
-            <ol className="verses">
+            <ol className={`verses ${layout === "paragraph" ? "verses-paragraph" : "verses-lines"}`} data-layout={layout}>
               {passage.verses.map((verse) => {
                 const verseMarkings = currentMarkings.filter(
                   (marking) => marking.verse === verse.verse,

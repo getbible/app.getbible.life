@@ -11,6 +11,12 @@ export function boundaryTurn(
 
 export interface BoundaryIntent { direction: -1 | 1; at: number }
 
+export type ReaderLayout = "lines" | "paragraph";
+
+export function readerLayout(value: string | null | undefined): ReaderLayout {
+  return value === "paragraph" ? "paragraph" : "lines";
+}
+
 export function boundaryIntent(
   current: BoundaryIntent | null,
   direction: -1 | 1,

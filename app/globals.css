@@ -1167,6 +1167,31 @@ summary:focus-visible {
   transition: background-color 100ms ease;
 }
 
+.verses-paragraph {
+  display: block;
+  line-height: 1.68;
+}
+
+.verses-paragraph li {
+  display: inline;
+  padding: 0;
+}
+
+.verses-paragraph li::after {
+  content: " ";
+}
+
+.verses-paragraph .verse-number {
+  min-width: auto;
+  margin-inline: 0 0.42em;
+  padding: 3px 0;
+}
+
+.verses-paragraph .inline-note {
+  display: grid;
+  margin-block: 7px;
+}
+
 .verse-number {
   display: inline-block;
   min-width: 2.35em;

@@ -4,7 +4,7 @@ import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassag
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
-import { boundaryIntent, boundaryTurn, readerStorageKeys } from "../lib/reader-state.ts";
+import { boundaryIntent, boundaryTurn, readerLayout, readerStorageKeys } from "../lib/reader-state.ts";
 import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance.ts";
 import { flattenTranslation, highlightSearchText, searchVersePage, searchVersePageAsync, searchVerses } from "../lib/search.ts";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown.ts";
@@ -247,6 +247,13 @@ test("returns search results in ordered batches and resumes from its cursor", as
 
 test("clears only getBible.Life reader storage keys", () => {
   assert.deepEqual(readerStorageKeys(["unrelated", "getbible-reader:notes:v1", "getbible-reader:last:v1"]), ["getbible-reader:notes:v1", "getbible-reader:last:v1"]);
+});
+
+test("normalizes the persistent verse layout preference", () => {
+  assert.equal(readerLayout("paragraph"), "paragraph");
+  assert.equal(readerLayout("lines"), "lines");
+  assert.equal(readerLayout("unexpected"), "lines");
+  assert.equal(readerLayout(null), "lines");
 });
 
 test("offers stable light and dark reading palettes", () => {
