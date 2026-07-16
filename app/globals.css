@@ -247,9 +247,10 @@ summary:focus-visible {
 .search-results li strong { font-size: 11px; }
 .search-results li span { font-family: Georgia, "Times New Roman", serif; font-size: 13px; line-height: 1.45; }
 .search-results mark {
-  padding: 0 0.08em;
-  border-radius: 2px;
-  background: color-mix(in srgb, var(--foreground) 18%, var(--background));
+  padding: 0 0.16em;
+  border: 1px solid #dca900;
+  border-radius: 4px;
+  background: color-mix(in srgb, #fde047 42%, var(--background));
   color: var(--foreground);
   font-weight: 760;
 }
@@ -1224,6 +1225,51 @@ summary:focus-visible {
   border-radius: 3px;
   scroll-margin-top: 64px;
   transition: background-color 100ms ease;
+}
+
+.verses li.search-arrival {
+  animation: search-arrival-verse 7s ease-out forwards;
+}
+
+.search-arrival-word {
+  padding: 0 0.08em;
+  border: 1px solid #dc2626;
+  border-radius: 3px;
+  background: color-mix(in srgb, #ef4444 24%, var(--background));
+  color: var(--foreground);
+  font-weight: 760;
+  animation: search-arrival-word 7s ease-out forwards;
+}
+
+@keyframes search-arrival-verse {
+  0%, 72% {
+    outline: 2px solid #eab308;
+    outline-offset: 3px;
+    background-color: color-mix(in srgb, #fde047 26%, transparent);
+  }
+  100% {
+    outline-color: transparent;
+    background-color: transparent;
+  }
+}
+
+@keyframes search-arrival-word {
+  0%, 72% {
+    border-color: #dc2626;
+    background-color: color-mix(in srgb, #ef4444 24%, var(--background));
+  }
+  100% {
+    border-color: transparent;
+    background-color: transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .verses li.search-arrival,
+  .search-arrival-word {
+    animation-duration: 7s;
+    animation-timing-function: step-end;
+  }
 }
 
 .verses-paragraph {

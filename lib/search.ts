@@ -3,6 +3,7 @@ import type { WholeTranslation } from "./getbible";
 export type WordMode = "all" | "any" | "phrase";
 export type MatchMode = "partial" | "exact";
 export type SearchScope = "all" | "ot" | "nt" | `book:${number}`;
+export const SEARCH_ARRIVAL_MS = 7_000;
 
 export interface SearchVerse {
   book: number;

@@ -52,7 +52,7 @@ import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyRef
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, normalizeReadingWidth, type ReadingWidth, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance";
-import { flattenTranslation, highlightSearchText, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
+import { flattenTranslation, highlightSearchText, SEARCH_ARRIVAL_MS, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
@@ -88,6 +88,17 @@ interface WholeVerseSelection {
   verse: number;
   text: string;
   reference: string;
+}
+
+interface SearchArrival {
+  book: number;
+  chapter: number;
+  verse: number;
+  query: string;
+  match: MatchMode;
+  caseSensitive: boolean;
+  locale?: string;
+  token: number;
 }
 
 function storedValue<T>(key: string, fallback: T): T {
@@ -176,6 +187,7 @@ export default function Home() {
   const [searchCursor, setSearchCursor] = useState(0);
   const [searchComplete, setSearchComplete] = useState(true);
   const [searchRunning, setSearchRunning] = useState(false);
+  const [searchArrival, setSearchArrival] = useState<SearchArrival | null>(null);
   const [infoModal, setInfoModal] = useState<InfoModal>(null);
   const requestId = useRef(0);
   const booksRef = useRef<Book[]>([]);
@@ -428,6 +440,12 @@ export default function Home() {
     }, 80);
     return () => window.clearTimeout(timer);
   }, [passage, pendingVerse]);
+
+  useEffect(() => {
+    if (!searchArrival || !passage || passage.book_nr !== searchArrival.book || passage.chapter !== searchArrival.chapter) return;
+    const timer = window.setTimeout(() => setSearchArrival(null), SEARCH_ARRIVAL_MS);
+    return () => window.clearTimeout(timer);
+  }, [passage, searchArrival]);
 
   useEffect(() => {
     if (!passage) return;
@@ -967,6 +985,7 @@ export default function Home() {
           {!searchQuery.trim() ? <p className="search-prompt">Type a word or phrase to search the current translation.</p> : searchError ? <p className="search-error">{searchError}</p> : searchLoading || searchNeedsInitialization ? <div className="search-initializing"><i /><strong>Initializing search</strong><span>Downloading and indexing {translation?.translation} once.</span></div> : <>
             <p className="search-count">{searchResults.length.toLocaleString()} result{searchResults.length === 1 ? "" : "s"} loaded{searchComplete ? " · end of results" : " · scroll for more"}</p>
             {searchResults.length ? <ol>{searchResults.map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
+              setSearchArrival({ book: result.book, chapter: result.chapter, verse: result.verse, query: searchQuery, match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang, token: Date.now() });
               setPendingVerse(result.verse);
               go({ translation: route.translation, book: result.book, chapter: result.chapter }, false, result.bookName);
               setSearchOpen(false);
@@ -1424,12 +1443,14 @@ export default function Home() {
                   : null;
                 const reference = `${passage.book_name} ${passage.chapter}:${verse.verse}`;
                 const verseNote = notes.find((note) => noteKey(note) === noteKey({ passage: route, verse: verse.verse }));
+                const arrival = searchArrival?.book === passage.book_nr && searchArrival.chapter === passage.chapter && searchArrival.verse === verse.verse ? searchArrival : null;
 
                 return (
                   <li
                     id={`v${verse.verse}`}
                     key={verse.verse}
-                    className={wholeMarking ? "whole-marked" : ""}
+                    className={`${wholeMarking ? "whole-marked " : ""}${arrival ? "search-arrival" : ""}`.trim()}
+                    data-search-arrival={arrival?.token}
                     style={
                       wholeColor
                         ? { backgroundColor: translucentColor(wholeColor.value) }
@@ -1455,16 +1476,21 @@ export default function Home() {
                         const segmentColor = segment.colorId
                           ? colorMap.get(segment.colorId)
                           : null;
+                        const segmentContent = arrival
+                          ? highlightSearchText(segment.text, arrival.query, { match: arrival.match, caseSensitive: arrival.caseSensitive, locale: arrival.locale }).map((part, index) => part.highlighted
+                            ? <span className="search-arrival-word" key={`${segment.start}-${index}`}>{part.text}</span>
+                            : part.text)
+                          : segment.text;
                         return segmentColor ? (
                           <mark
                             key={`${segment.start}-${segment.end}`}
                             style={{ backgroundColor: segmentColor.value }}
                           >
-                            {segment.text}
+                            {segmentContent}
                           </mark>
                         ) : (
                           <span key={`${segment.start}-${segment.end}`}>
-                            {segment.text}
+                            {segmentContent}
                           </span>
                         );
                       })}

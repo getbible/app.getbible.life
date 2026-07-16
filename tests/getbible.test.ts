@@ -6,7 +6,7 @@ import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference 
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
 import { boundaryIntent, boundaryTurn, normalizeReadingWidth, readerLayout, readerStorageKeys } from "../lib/reader-state.ts";
 import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance.ts";
-import { flattenTranslation, highlightSearchText, searchVersePage, searchVersePageAsync, searchVerses } from "../lib/search.ts";
+import { flattenTranslation, highlightSearchText, SEARCH_ARRIVAL_MS, searchVersePage, searchVersePageAsync, searchVerses } from "../lib/search.ts";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown.ts";
 
 test("parses and sanitizes passage URLs",()=>{
@@ -229,6 +229,7 @@ test("highlights every matching result word without losing punctuation", () => {
   assert.deepEqual(partial.filter((part) => part.highlighted).map((part) => part.text), ["cat", "cats", "CAT"]);
   const exact = highlightSearchText("woman and women", "woman", { match: "exact", caseSensitive: false, locale: "en" });
   assert.deepEqual(exact.filter((part) => part.highlighted).map((part) => part.text), ["woman"]);
+  assert.equal(SEARCH_ARRIVAL_MS, 7_000);
 });
 
 test("returns search results in ordered batches and resumes from its cursor", async () => {
