@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
+import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, resolvedLanguageName, translationLanguage, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
@@ -48,6 +48,18 @@ test("sorts numbered API records numerically",()=>{
 test("sorts translations by language then name",()=>{
   const list=translationValues({b:{translation:"Zulu",abbreviation:"b",language:"English",lang:"en",direction:"LTR",sha:"b"},a:{translation:"Alpha",abbreviation:"a",language:"English",lang:"en",direction:"LTR",sha:"a"},c:{translation:"Beta",abbreviation:"c",language:"Afrikaans",lang:"af",direction:"LTR",sha:"c"}});
   assert.deepEqual(list.map(item=>item.abbreviation),["c","a","b"]);
+});
+
+test("resolves and sorts translations with missing language names", () => {
+  assert.equal(resolvedLanguageName("", "tpi"), "Tok Pisin");
+  assert.equal(resolvedLanguageName(undefined, "tlh"), "Klingon");
+  assert.equal(resolvedLanguageName("", "bai"), "BAI");
+  const list = translationValues({
+    tpi: { translation: "Pisin", abbreviation: "tpi", language: "", lang: "tpi", direction: "LTR", sha: "a" },
+    en: { translation: "English Bible", abbreviation: "en", language: "English", lang: "en", direction: "LTR", sha: "b" },
+    tlh: { translation: "Klingon Bible", abbreviation: "tlh", language: "", lang: "tlh", direction: "LTR", sha: "c" },
+  });
+  assert.deepEqual(list.map(translationLanguage), ["English", "Klingon", "Tok Pisin"]);
 });
 
 test("validates SHA-1 values and weekly freshness",()=>{

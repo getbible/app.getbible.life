@@ -2,7 +2,28 @@ export const API_ROOT = "https://api.getbible.net/v2";
 export const WEEK_MS = 604_800_000;
 
 export type Direction = "LTR" | "RTL" | string;
-export interface Translation { translation:string; abbreviation:string; language:string; lang:string; direction:Direction; distribution_license?:string; sha:string }
+export interface Translation {
+  translation:string;
+  abbreviation:string;
+  description?:string;
+  lang:string;
+  language:string;
+  direction:Direction;
+  encoding?:string;
+  distribution_lcsh?:string;
+  distribution_version?:string;
+  distribution_version_date?:string;
+  distribution_abbreviation?:string;
+  distribution_about?:string;
+  distribution_license?:string;
+  distribution_sourcetype?:string;
+  distribution_source?:string;
+  distribution_versification?:string;
+  distribution_history?:Record<string,string>;
+  url?:string;
+  sha:string;
+  [key:string]:unknown;
+}
 export interface Book { nr:number; name:string; sha:string; direction:Direction }
 export interface ChapterInfo { chapter:number; name:string; sha:string }
 export interface Verse { chapter:number; verse:number; name:string; text:string }
@@ -15,8 +36,22 @@ export interface Passage { translation:string; book:number; chapter:number }
 export const valuesByNumber = <T>(record:Record<string,T>):T[] =>
   Object.entries(record).sort(([a],[b]) => Number(a)-Number(b)).map(([,value]) => value);
 
+export function resolvedLanguageName(language:string|undefined, lang:string|undefined):string {
+  const explicit=language?.trim();
+  if(explicit) return explicit;
+  const code=lang?.trim();
+  if(!code) return "Unknown";
+  try {
+    const resolved=new Intl.DisplayNames(["en"],{type:"language"}).of(code);
+    return resolved && resolved.toLocaleLowerCase()!==code.toLocaleLowerCase() ? resolved : code.toLocaleUpperCase();
+  } catch { return code.toLocaleUpperCase(); }
+}
+
+export const translationLanguage = (translation:Translation):string =>
+  resolvedLanguageName(translation.language,translation.lang);
+
 export const translationValues = (record:Record<string,Translation>):Translation[] =>
-  Object.values(record).sort((a,b) => a.language.localeCompare(b.language) || a.translation.localeCompare(b.translation));
+  Object.values(record).sort((a,b) => translationLanguage(a).localeCompare(translationLanguage(b)) || a.translation.localeCompare(b.translation));
 
 export function parsePassage(search:string):Passage {
   const params = new URLSearchParams(search);

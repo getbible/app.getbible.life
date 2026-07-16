@@ -22,6 +22,7 @@ import {
   parsePassagePath,
   passagePath,
   passageSearch,
+  translationLanguage,
   translationValues,
   valuesByNumber,
 } from "../lib/getbible";
@@ -72,6 +73,7 @@ const INITIAL_PASSAGE: Passage = { translation: "kjv", book: 43, chapter: 3 };
 
 type Drawer = "reader" | "markings" | null;
 type StudyTab = "markings" | "notes";
+type InfoModal = "translation" | "sync" | null;
 
 interface TextSelection {
   verse: number;
@@ -105,6 +107,10 @@ function storedValue<T>(key: string, fallback: T): T {
 
 function identifier(): string {
   return globalThis.crypto?.randomUUID?.() ?? `${Date.now()}-${Math.random()}`;
+}
+
+function distributionText(value: string | undefined): string {
+  return value?.replace(/\\par/g, "\n").replace(/\n{3,}/g, "\n\n").trim() ?? "";
 }
 
 function selectionWithin(element: HTMLElement): { start: number; end: number; text: string } | null {
@@ -175,6 +181,7 @@ export default function Home() {
   const [searchCursor, setSearchCursor] = useState(0);
   const [searchComplete, setSearchComplete] = useState(true);
   const [searchRunning, setSearchRunning] = useState(false);
+  const [infoModal, setInfoModal] = useState<InfoModal>(null);
   const requestId = useRef(0);
   const booksRef = useRef<Book[]>([]);
   const searchRequestId = useRef(0);
@@ -263,11 +270,11 @@ export default function Home() {
   }, [themeMode]);
 
   useEffect(() => {
-    if (!searchOpen) return;
+    if (!searchOpen && !infoModal) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previous; };
-  }, [searchOpen]);
+  }, [infoModal, searchOpen]);
 
   useEffect(() => {
     if (!markingsReady) return;
@@ -477,6 +484,7 @@ export default function Home() {
       if (event.key === "Escape") {
         setDrawer(null);
         setSearchOpen(false);
+        setInfoModal(null);
         setTextSelection(null);
         setWholeVerseSelection(null);
       }
@@ -492,7 +500,7 @@ export default function Home() {
     boundaryAttempt.current = null;
     wheelGestureActive.current = false;
     window.clearTimeout(wheelGestureTimer.current);
-    if (drawer || searchOpen || markdownMode || loading || !passage) return;
+    if (drawer || searchOpen || infoModal || markdownMode || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
@@ -519,7 +527,7 @@ export default function Home() {
       window.clearTimeout(wheelGestureTimer.current);
       window.removeEventListener("wheel", wheel);
     };
-  }, [drawer, loading, markdownMode, passage, route, searchOpen, turn]);
+  }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, turn]);
 
   useEffect(() => {
     const query = searchQuery.trim();
@@ -851,6 +859,18 @@ export default function Home() {
     setMarkdownMessage("Markdown file created.");
   };
 
+  const translationFacts: Array<[string, string]> = translation ? [
+    ["Language", `${translationLanguage(translation)}${translation.lang ? ` (${translation.lang})` : ""}`],
+    ["Encoding", translation.encoding ?? ""],
+    ["Direction", translation.direction],
+    ["LCSH", translation.distribution_lcsh ?? ""],
+    ["Distribution abbreviation", translation.distribution_abbreviation ?? ""],
+    ["Versification", translation.distribution_versification ?? ""],
+    ["SHA", translation.sha],
+  ].filter(([, value]) => Boolean(value)) as Array<[string, string]> : [];
+  const translationHistory = Object.entries(translation?.distribution_history ?? {})
+    .sort(([a], [b]) => a.localeCompare(b, undefined, { numeric: true }));
+
   return (
     <main className={drawer ? "drawer-open" : ""}>
       <header className="topbar">
@@ -952,6 +972,47 @@ export default function Home() {
         </div>
       </section> : null}
 
+      {infoModal ? <div className="info-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) setInfoModal(null); }}>
+        <section className="info-modal" role="dialog" aria-modal="true" aria-label={infoModal === "translation" ? "Translation details" : "How getBible is maintained"}>
+          <header className="info-modal-header">
+            <div>
+              <h2>{infoModal === "translation" && translation
+                ? `${translation.translation} (${translation.abbreviation.toUpperCase()}${translation.distribution_version ? ` - ${translation.distribution_version}` : ""})`
+                : "How getBible stays synchronized"}</h2>
+              {infoModal === "translation" && translation?.distribution_version_date ? <p>Last updated: {translation.distribution_version_date}</p> : null}
+            </div>
+            <button type="button" aria-label="Close information" onClick={() => setInfoModal(null)}>×</button>
+          </header>
+          <div className="info-modal-body">
+            {infoModal === "translation" && translation ? <>
+              <dl className="translation-facts">
+                {translationFacts.map(([label, value]) => <div key={label}><dt>{label}</dt><dd>{value}</dd></div>)}
+              </dl>
+              {translation.description ? <section><h3>Description</h3><p>{translation.description}</p></section> : null}
+              {translation.distribution_about ? <section><h3>About and contact information</h3><p className="preserve-lines">{distributionText(translation.distribution_about)}</p></section> : null}
+              {translation.distribution_license ? <section><h3>License</h3><p>{translation.distribution_license}</p></section> : null}
+              {translation.distribution_sourcetype || translation.distribution_source ? <section><h3>Source</h3>
+                {translation.distribution_sourcetype ? <p>{translation.distribution_sourcetype}</p> : null}
+                {translation.distribution_source ? <a href={translation.distribution_source} target="_blank" rel="noreferrer">{translation.distribution_source}</a> : null}
+              </section> : null}
+              {translation.url ? <section><h3>GetBible API resource</h3><a href={translation.url} target="_blank" rel="noreferrer">{translation.url}</a></section> : null}
+              {translationHistory.length ? <section><h3>Translation history</h3><ol className="translation-history">
+                {translationHistory.map(([version, description]) => <li key={version}><strong>{version.replace(/^history_/, "")}</strong><span>{description}</span></li>)}
+              </ol></section> : null}
+            </> : <div className="sync-information">
+              <p>At <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, we&apos;ve established a robust system to keep our API synchronized with the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> project&apos;s <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a>. Let me explain how this integration works in simple terms.</p>
+              <p>We source our Bible text directly from the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a>. To monitor any updates, we generate “hash values” for each chapter, book, and translation. These hash values serve as unique identifiers that change only when the underlying content changes, thereby ensuring a tight integration between <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a> and the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> modules.</p>
+              <p>Every month, an automated process runs for approximately three hours. During this window, we fetch the latest Bible text from the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> modules. Subsequently, we compare the new hash values and the text with the previous ones. Any detected changes trigger updates to both our <a href="https://git.vdm.dev/getBible/v2" target="_blank" rel="noreferrer">official getBible hash repository</a> and the <a href="https://api.getbible.net" target="_blank" rel="noreferrer">Bible API</a> for all affected <a href="https://api.getbible.net/v2/translations.json" target="_blank" rel="noreferrer">translations</a>. This system has been operating seamlessly for several years.</p>
+              <p>Once the updates are complete, any application utilizing our <a href="https://api.getbible.net" target="_blank" rel="noreferrer">Bible API</a> should monitor the <a href="https://getbible.life/docs#mapping-helpers" target="_blank" rel="noreferrer">hash values</a> at the chapter, book, or translation level. Spotting a change in these values indicates that they should update their respective systems.</p>
+              <p>Hash values can change due to various reasons, including textual corrections like adding omitted verses, rectifying spelling errors, or addressing any discrepancies flagged by the publishers maintaining the <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a> at <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a>.</p>
+              <p>The <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> initiative, also known as the SWORD Project, is the “source of truth” for <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">getBible</a>. Any modifications in the <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">Crosswire</a> <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">modules</a> get reflected in our API within days, ensuring our users access the most precise and current Bible text. We pledge to uphold this standard as long as <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a> exists and our build scripts remain operational.</p>
+              <p>We&apos;re united in our mission to preserve the integrity and authenticity of the Bible text. If you have questions or require additional information, please use our <a href="https://git.vdm.dev/getBible/support" target="_blank" rel="noreferrer">support system</a>. We&apos;re here to assist and will respond promptly.</p>
+              <p>Thank you for your understanding and for being an integral part of the <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a> community.</p>
+            </div>}
+          </div>
+        </section>
+      </div> : null}
+
       <button
         className="drawer-scrim"
         type="button"
@@ -981,7 +1042,7 @@ export default function Home() {
               >
                 {translations.map((item) => (
                   <option value={item.abbreviation} key={item.abbreviation}>
-                    {item.language} · {item.translation}
+                    {translationLanguage(item)} · {item.translation}
                   </option>
                 ))}
               </select>
@@ -1402,10 +1463,9 @@ export default function Home() {
             </ol>
 
             <footer className="passage-footer">
-              <span>{translation?.translation}</span>
-              {translation?.distribution_license ? (
-                <small>{translation.distribution_license}</small>
-              ) : null}
+              {translation ? <button className="translation-details-button" type="button" aria-haspopup="dialog" onClick={() => setInfoModal("translation")}>
+                {translation.translation}
+              </button> : null}
             </footer>
           </article>
         )}
@@ -1413,7 +1473,7 @@ export default function Home() {
 
       {passage ? <footer className="site-footer">
         <span className="site-footer-life"><a href={getBibleLifeUrl(route, passage.book_name)}>getBible.Life</a> <span>The words of eternal life</span></span>
-        <span>Lovingly maintained by Vast Development Method <b className="site-footer-heart" aria-label="with love">♥</b></span>
+        <span className="maintenance-credit">Lovingly maintained by <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">Vast Development Method</a> <button className="site-footer-heart" type="button" aria-label="How getBible is lovingly maintained" aria-haspopup="dialog" onClick={() => setInfoModal("sync")}>♥</button></span>
       </footer> : null}
 
       {textSelection || wholeVerseSelection ? (

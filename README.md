@@ -85,3 +85,6 @@ Edit `config/reader.ts` to choose the initial marking names and colors for a dep
 ## License
 
 Application code is released under the MIT License. Bible translations retain their own upstream licenses, which the reader displays from each translation's API metadata.
+- Clickable translation credits with complete API metadata, licensing, source details, and version history
+- Language-aware translation sorting with a CLDR-backed fallback when an API language name is absent
+- Maintenance and CrossWire synchronization information available from the site footer
