@@ -2,6 +2,23 @@
   "name": "getbible-reader",
   "version": "0.1.0",
   "private": true,
+  "description": "A fast, browser-native Bible reader powered by the getBible API.",
+  "author": {
+    "name": "Llewellyn van der Merwe",
+    "organization": "Vast Development Method"
+  },
+  "maintainers": [
+    {
+      "name": "Llewellyn van der Merwe",
+      "organization": "Vast Development Method"
+    }
+  ],
+  "license": "GPL-3.0-only",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/getBible/app-gpt.git"
+  },
+  "homepage": "https://getbible.life/",
   "engines": {
     "node": ">=22.13.0"
   },
