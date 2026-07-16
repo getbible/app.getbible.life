@@ -1711,7 +1711,11 @@ summary:focus-visible {
   }
 
   .reading-stage {
-    padding: 8px 3px 78px;
+    padding: 8px clamp(28px, 3vw, 54px) 78px;
+  }
+
+  .reading-stage[data-reading-width="full"] {
+    padding-inline: 3px;
   }
 
   .passage-line {

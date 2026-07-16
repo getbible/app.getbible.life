@@ -272,6 +272,11 @@ test("defaults new readers to full width and offers Bible reading fonts", () => 
   assert.deepEqual(READER_FONTS.slice(2, 7).map((font) => font.name), ["Baskerville", "Garamond", "Charter", "Cambria", "Times New Roman"]);
 });
 
+test("keeps full-width reading edge-to-edge on narrow screens", () => {
+  const styles = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.reading-stage \{\s*padding: 8px clamp\(28px, 3vw, 54px\) 78px;\s*\}[\s\S]*?\.reading-stage\[data-reading-width="full"\] \{\s*padding-inline: 3px;\s*\}/);
+});
+
 test("offers stable light and dark reading palettes", () => {
   assert.deepEqual(DARK_PALETTES.map(({ id }) => id), ["black", "brown", "charcoal", "navy"]);
   assert.equal(validPalette(DARK_PALETTES, "brown", "black"), "brown");
