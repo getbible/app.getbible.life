@@ -50,8 +50,8 @@ import {
 } from "../lib/markings";
 import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyReference } from "../lib/daily";
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
-import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, readerStorageKeys } from "../lib/reader-state";
-import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance";
+import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, normalizeReadingWidth, type ReadingWidth, readerStorageKeys } from "../lib/reader-state";
+import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance";
 import { flattenTranslation, highlightSearchText, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 
@@ -89,13 +89,6 @@ interface WholeVerseSelection {
   text: string;
   reference: string;
 }
-
-const READER_FONTS = [
-  { id: "serif", name: "Classic serif" },
-  { id: "book", name: "Book serif" },
-  { id: "sans", name: "Clean sans" },
-  { id: "system", name: "System sans" },
-];
 
 function storedValue<T>(key: string, fallback: T): T {
   try {
@@ -157,7 +150,7 @@ export default function Home() {
   const [readerFont, setReaderFont] = useState("serif");
   const [lightPalette, setLightPalette] = useState("white");
   const [darkPalette, setDarkPalette] = useState("black");
-  const [readingWidth, setReadingWidth] = useState<"page" | "full">("page");
+  const [readingWidth, setReadingWidth] = useState<ReadingWidth>("full");
   const [layout, setLayout] = useState<ReaderLayout>("lines");
   const [colorSearch, setColorSearch] = useState("");
   const [verifiedInfo, setVerifiedInfo] = useState(false);
@@ -233,7 +226,7 @@ export default function Home() {
       setReaderFont(READER_FONTS.some((font) => font.id === savedFont) ? savedFont : "serif");
       setLightPalette(validPalette(LIGHT_PALETTES, savedPalette, "white"));
       setDarkPalette(validPalette(DARK_PALETTES, savedDarkPalette, "black"));
-      setReadingWidth(localStorage.getItem(READING_WIDTH) === "full" ? "full" : "page");
+      setReadingWidth(normalizeReadingWidth(localStorage.getItem(READING_WIDTH)));
       setLayout(readerLayout(localStorage.getItem(READER_LAYOUT)));
       document.documentElement.dataset.palette = savedPalette;
       document.documentElement.dataset.darkPalette = savedDarkPalette;
@@ -701,6 +694,14 @@ export default function Home() {
     setWholeVerseSelection(null);
   };
 
+  const applySelectionColor = (colorId: string) => {
+    if (textSelection) {
+      addMarking(textSelection.verse, textSelection.text, textSelection.reference, textSelection.start, textSelection.end, colorId);
+    } else if (wholeVerseSelection) {
+      applyWholeVerseMarking(wholeVerseSelection, colorId);
+    }
+  };
+
   const captureSelection = (
     verse: number,
     reference: string,
@@ -1134,7 +1135,7 @@ export default function Home() {
               <label className="field">
                 <span>Reading width</span>
                 <select value={readingWidth} onChange={(event) => {
-                  const value = event.target.value === "full" ? "full" : "page";
+                  const value = normalizeReadingWidth(event.target.value);
                   setReadingWidth(value);
                   localStorage.setItem(READING_WIDTH, value);
                 }}>
@@ -1203,18 +1204,23 @@ export default function Home() {
             }} />
             {studyTab === "markings" ? <>
             <h2>{selectedColorId ? "Saved markings" : "Marking groups"}</h2>
-            {!selectedColorId && markings.length ? (
-              <div className="marking-groups">
+            {!selectedColorId && colors.length ? <>
+              <label className="color-search group-search">
+                <span>Find a marking group</span>
+                <input type="search" value={colorSearch} placeholder={`Search ${colors.length} groups`} onChange={(event) => setColorSearch(event.target.value)} />
+              </label>
+              <div className="marking-groups scalable">
                 {visibleColors.map((color) => {
                   const count = markings.filter((marking) => marking.colorId === color.id).length;
-                  return <button type="button" key={color.id} onClick={() => selectMarkingGroup(color.id)}>
+                  return <button className={color.id === activeColorId ? "active" : ""} type="button" key={color.id} onClick={() => selectMarkingGroup(color.id)}>
                     <span className="marking-dot" style={{ backgroundColor: color.value }} />
                     <span><strong>{color.name}</strong><small>{count} marking{count === 1 ? "" : "s"}</small></span>
                     <b>›</b>
                   </button>;
                 })}
               </div>
-            ) : selectedColorId ? <>
+              {!visibleColors.length ? <p className="empty-markings">No marking groups match your search.</p> : null}
+            </> : selectedColorId ? <>
               <button className="back-to-groups" type="button" onClick={() => setSelectedColorId(null)}>‹ All marking groups</button>
               <div className="selected-group-title">
                 <span className="marking-dot" style={{ backgroundColor: colorMap.get(selectedColorId)?.value }} />
@@ -1263,12 +1269,8 @@ export default function Home() {
               <p className="empty-markings">No markings yet.</p>
             )}
 
-            <section className="color-section">
-              <h2>Colors</h2>
-              {colors.length > 8 ? <label className="color-search">
-                <span>Find a color group</span>
-                <input type="search" value={colorSearch} placeholder={`Search ${colors.length} groups`} onChange={(event) => setColorSearch(event.target.value)} />
-              </label> : null}
+            <details className="color-section">
+              <summary>Manage group names and colors</summary>
               <div className="color-manager scalable">
                 {visibleColors.map((color) => (
                   <div className="color-row" key={color.id}>
@@ -1287,7 +1289,7 @@ export default function Home() {
                 ))}
               </div>
               <button className="add-color" type="button" onClick={addColor}>Add color</button>
-            </section>
+            </details>
 
             <section className="backup-section">
               <h2>Backup and reset</h2>
@@ -1494,19 +1496,17 @@ export default function Home() {
         <div className="selection-toolbar" role="dialog" aria-label="Mark selected text">
           <span>{textSelection ? `Mark “${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}”` : `Mark ${wholeVerseSelection?.reference}`}</span>
           <div>
-            {colors.map((color) => (
-              <button
-                type="button"
-                key={color.id}
-                className="selection-color"
-                style={{ backgroundColor: color.value }}
-                aria-label={`Mark selection as ${color.name}`}
-                data-tooltip={color.name}
-                onClick={() =>
-                  textSelection ? addMarking(textSelection.verse, textSelection.text, textSelection.reference, textSelection.start, textSelection.end, color.id) : wholeVerseSelection && applyWholeVerseMarking(wholeVerseSelection, color.id)
-                }
-              />
-            ))}
+            {colorMap.get(activeColorId) ? <button className="selection-active-group" type="button" onClick={() => applySelectionColor(activeColorId)}>
+              <i style={{ backgroundColor: colorMap.get(activeColorId)?.value }} />
+              <span>{colorMap.get(activeColorId)?.name}</span>
+            </button> : null}
+            <label className="selection-group-picker">
+              <span className="sr-only">Choose another marking group</span>
+              <select value="" onChange={(event) => event.target.value && applySelectionColor(event.target.value)}>
+                <option value="" disabled>More groups…</option>
+                {colors.filter((color) => color.id !== activeColorId).map((color) => <option value={color.id} key={color.id}>{color.name}</option>)}
+              </select>
+            </label>
             {wholeVerseSelection ? <button className="selection-none" type="button" aria-label={`Remove whole-verse color from ${wholeVerseSelection.reference}`} title="No whole-verse color" onClick={() => {
               setMarkings((current) => withoutWholeVerseMarking(current, route, wholeVerseSelection.verse));
               setWholeVerseSelection(null);

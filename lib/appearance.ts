@@ -12,6 +12,18 @@ export const DARK_PALETTES = [
   { id: "navy", name: "Midnight blue" },
 ] as const;
 
+export const READER_FONTS = [
+  { id: "serif", name: "Classic serif" },
+  { id: "book", name: "Book serif" },
+  { id: "baskerville", name: "Baskerville" },
+  { id: "garamond", name: "Garamond" },
+  { id: "charter", name: "Charter" },
+  { id: "cambria", name: "Cambria" },
+  { id: "times", name: "Times New Roman" },
+  { id: "sans", name: "Clean sans" },
+  { id: "system", name: "System sans" },
+] as const;
+
 export function validPalette(
   palettes: ReadonlyArray<{ id: string }>,
   candidate: string | null,

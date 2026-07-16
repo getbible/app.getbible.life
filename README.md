@@ -18,7 +18,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Verse notes and whole-verse markings follow the canonical book/chapter/verse across translations; selected word and phrase markings remain translation-specific.
 - The visible reading position is remembered down to the verse and restored on the next visit.
 - First-time readers open the daily Scripture in King James Version; clicking `getBible.Life` returns to that day’s cached verse in KJV.
-- Page-width and full-screen-width reading modes, selectable fonts, edge-to-edge mobile reading, and touch-sized controls.
+- Full-screen-width reading by default, optional page width, nine selectable reading fonts, edge-to-edge mobile reading, and touch-sized controls.
 - A glasses button opens the current chapter as Markdown with an H1 chapter heading, valid ordered-list verses, Copy and Download `.md` actions, and the translation’s full name plus copyright/license notice in the footer.
 - A muted desktop-only end-of-chapter footer links the current passage to `getbible.life` and displays the dynamically current Vast Development Method copyright year.
 - The browser favicon is the replaceable 96×96 `public/favicon.png` asset.
@@ -32,6 +32,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - The current translation license is displayed with the text.
 - Clickable translation credits with complete API metadata, licensing, source details, and version history.
 - Persistent reader layout switch between one verse per line and a continuous paragraph.
+- Sixty searchable starter marking groups with a compact large-list color picker and editable deployment colors.
 - Language-aware translation sorting with a CLDR-backed fallback when an API language name is absent.
 - Maintenance and CrossWire synchronization information available from the site footer.
 

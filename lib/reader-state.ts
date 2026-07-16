@@ -12,9 +12,14 @@ export function boundaryTurn(
 export interface BoundaryIntent { direction: -1 | 1; at: number }
 
 export type ReaderLayout = "lines" | "paragraph";
+export type ReadingWidth = "page" | "full";
 
 export function readerLayout(value: string | null | undefined): ReaderLayout {
   return value === "paragraph" ? "paragraph" : "lines";
+}
+
+export function normalizeReadingWidth(value: string | null | undefined): ReadingWidth {
+  return value === "page" ? "page" : "full";
 }
 
 export function boundaryIntent(

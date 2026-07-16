@@ -4,8 +4,8 @@ import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassag
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
-import { boundaryIntent, boundaryTurn, readerLayout, readerStorageKeys } from "../lib/reader-state.ts";
-import { DARK_PALETTES, LIGHT_PALETTES, validPalette } from "../lib/appearance.ts";
+import { boundaryIntent, boundaryTurn, normalizeReadingWidth, readerLayout, readerStorageKeys } from "../lib/reader-state.ts";
+import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance.ts";
 import { flattenTranslation, highlightSearchText, searchVersePage, searchVersePageAsync, searchVerses } from "../lib/search.ts";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown.ts";
 
@@ -126,8 +126,12 @@ test("sorts markings in canonical Bible order", () => {
   assert.deepEqual(markings.sort(compareMarkings).map((marking) => marking.id), ["ot-first", "ot-later", "nt"]);
 });
 
-test("loads marking groups from deployment configuration", () => {
-  assert.deepEqual(DEFAULT_MARKING_COLORS.map((color) => color.name), ["Promises", "Growth", "Study", "Prayer"]);
+test("loads the complete deployment marking configuration", () => {
+  assert.equal(DEFAULT_MARKING_COLORS.length, 60);
+  assert.equal(new Set(DEFAULT_MARKING_COLORS.map((color) => color.id)).size, 60);
+  assert.equal(DEFAULT_MARKING_COLORS[0].name, "Adultery");
+  assert.equal(DEFAULT_MARKING_COLORS.at(-1)?.name, "Worldly Wisdom");
+  assert.ok(DEFAULT_MARKING_COLORS.every((color) => /^#[0-9a-f]{6}$/i.test(color.value)));
 });
 
 test("merges imported colors and markings without duplicates", () => {
@@ -254,6 +258,13 @@ test("normalizes the persistent verse layout preference", () => {
   assert.equal(readerLayout("lines"), "lines");
   assert.equal(readerLayout("unexpected"), "lines");
   assert.equal(readerLayout(null), "lines");
+});
+
+test("defaults new readers to full width and offers Bible reading fonts", () => {
+  assert.equal(normalizeReadingWidth(null), "full");
+  assert.equal(normalizeReadingWidth("unexpected"), "full");
+  assert.equal(normalizeReadingWidth("page"), "page");
+  assert.deepEqual(READER_FONTS.slice(2, 7).map((font) => font.name), ["Baskerville", "Garamond", "Charter", "Cambria", "Times New Roman"]);
 });
 
 test("offers stable light and dark reading palettes", () => {
