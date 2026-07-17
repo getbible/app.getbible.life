@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import test from "node:test";
 import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, resolvedLanguageName, translationLanguage, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
 import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
+import { floatingToolbarPosition } from "../lib/floating-toolbar.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
 import { boundaryIntent, boundaryTurn, normalizeReadingWidth, readerLayout, readerStorageKeys } from "../lib/reader-state.ts";
@@ -315,4 +316,38 @@ test("keeps API scripture and user-created marking names outside UI localization
   assert.deepEqual(scripture, { book_name: "John", text: "For God so loved the world" });
   assert.equal(userGroup.name, "Promises");
   assert.notEqual(translate("search"), "Search");
+});
+
+test("positions the selection toolbar above a nearby verse", () => {
+  assert.deepEqual(
+    floatingToolbarPosition(
+      { top: 420, right: 620, bottom: 450, left: 220, width: 400, height: 30 },
+      { width: 360, height: 82 },
+      { width: 1000, height: 800 },
+    ),
+    { left: 240, top: 326, arrowLeft: 180, placement: "above" },
+  );
+});
+
+test("flips and constrains the selection toolbar at viewport edges", () => {
+  assert.deepEqual(
+    floatingToolbarPosition(
+      { top: 62, right: 40, bottom: 84, left: 8, width: 32, height: 22 },
+      { width: 360, height: 82 },
+      { width: 390, height: 720 },
+    ),
+    { left: 10, top: 96, arrowLeft: 18, placement: "below" },
+  );
+});
+
+test("keeps the selection toolbar clear of the mobile navigation", () => {
+  assert.deepEqual(
+    floatingToolbarPosition(
+      { top: 500, right: 250, bottom: 530, left: 150, width: 100, height: 30 },
+      { width: 300, height: 100 },
+      { width: 390, height: 680 },
+      { bottomInset: 58 },
+    ),
+    { left: 50, top: 388, arrowLeft: 150, placement: "above" },
+  );
 });

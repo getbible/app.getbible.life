@@ -6,6 +6,7 @@ import {
   type ReactNode,
   useCallback,
   useEffect,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -56,6 +57,7 @@ import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../li
 import { flattenTranslation, highlightSearchText, SEARCH_ARRIVAL_MS, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from "../lib/i18n";
+import { floatingToolbarPosition, type FloatingRect, type FloatingToolbarPosition } from "../lib/floating-toolbar";
 
 const LAST_PASSAGE = "getbible-reader:last:v1";
 const THEME = "getbible-reader:theme:v1";
@@ -91,6 +93,10 @@ interface WholeVerseSelection {
   text: string;
   reference: string;
 }
+
+type SelectionAnchor =
+  | { kind: "element"; element: HTMLElement }
+  | { kind: "range"; range: Range };
 
 interface SearchArrival {
   book: number;
@@ -128,7 +134,7 @@ function localizedLanguageName(translation: Translation, locale: string): string
   }
 }
 
-function selectionWithin(element: HTMLElement): { start: number; end: number; text: string } | null {
+function selectionWithin(element: HTMLElement): { start: number; end: number; text: string; range: Range } | null {
   const selection = window.getSelection();
   if (!selection || selection.isCollapsed || selection.rangeCount !== 1) return null;
 
@@ -142,7 +148,7 @@ function selectionWithin(element: HTMLElement): { start: number; end: number; te
   const text = range.toString();
   const end = start + text.length;
 
-  return text.trim() && end > start ? { start, end, text } : null;
+  return text.trim() && end > start ? { start, end, text, range: range.cloneRange() } : null;
 }
 
 export default function Home() {
@@ -210,6 +216,9 @@ export default function Home() {
   const boundaryAttempt = useRef<BoundaryIntent | null>(null);
   const wheelGestureActive = useRef(false);
   const wheelGestureTimer = useRef(0);
+  const selectionToolbar = useRef<HTMLDivElement | null>(null);
+  const selectionAnchor = useRef<SelectionAnchor | null>(null);
+  const [toolbarPosition, setToolbarPosition] = useState<FloatingToolbarPosition | null>(null);
   const locale = uiLocale(translation?.lang);
   const t = useMemo(() => createUiTranslator(locale, uiMessages.locale === locale ? uiMessages.messages : []), [locale, uiMessages]);
   const translatorRef = useRef(t);
@@ -225,6 +234,63 @@ export default function Home() {
   useEffect(() => {
     translatorRef.current = t;
   }, [t]);
+
+  const closeSelectionToolbar = useCallback(() => {
+    setTextSelection(null);
+    setWholeVerseSelection(null);
+    setToolbarPosition(null);
+    selectionAnchor.current = null;
+    window.getSelection()?.removeAllRanges();
+  }, []);
+
+  const positionSelectionToolbar = useCallback(() => {
+    const toolbar = selectionToolbar.current;
+    const anchor = selectionAnchor.current;
+    if (!toolbar || !anchor) return;
+
+    const rect = anchor.kind === "range"
+      ? anchor.range.getBoundingClientRect()
+      : anchor.element.getBoundingClientRect();
+    const measurable = rect.width > 0 || rect.height > 0;
+    if (!measurable) return;
+    if (rect.bottom < 48 || rect.top > window.innerHeight) {
+      setToolbarPosition(null);
+      return;
+    }
+
+    const anchorRect: FloatingRect = {
+      top: rect.top,
+      right: rect.right,
+      bottom: rect.bottom,
+      left: rect.left,
+      width: rect.width,
+      height: rect.height,
+    };
+    setToolbarPosition(floatingToolbarPosition(
+      anchorRect,
+      { width: toolbar.offsetWidth, height: toolbar.offsetHeight },
+      { width: window.innerWidth, height: window.innerHeight },
+      { bottomInset: window.innerWidth <= 720 ? 58 : 10 },
+    ));
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!textSelection && !wholeVerseSelection) return;
+    positionSelectionToolbar();
+
+    const reposition = () => positionSelectionToolbar();
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeSelectionToolbar();
+    };
+    window.addEventListener("resize", reposition);
+    window.addEventListener("scroll", reposition, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("resize", reposition);
+      window.removeEventListener("scroll", reposition, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [textSelection, wholeVerseSelection, closeSelectionToolbar, positionSelectionToolbar]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -728,13 +794,13 @@ export default function Home() {
       },
     ]);
     setActiveColorId(colorId);
-        setTextSelection(null);
-        setWholeVerseSelection(null);
-    window.getSelection()?.removeAllRanges();
+    closeSelectionToolbar();
   };
 
-  const chooseVerseMarking = (verse: number, text: string, reference: string) => {
+  const chooseVerseMarking = (verse: number, text: string, reference: string, element: HTMLElement) => {
     setTextSelection(null);
+    setToolbarPosition(null);
+    selectionAnchor.current = { kind: "element", element };
     setWholeVerseSelection({ verse, text, reference });
   };
 
@@ -751,7 +817,7 @@ export default function Home() {
       ];
     });
     setActiveColorId(colorId);
-    setWholeVerseSelection(null);
+    closeSelectionToolbar();
   };
 
   const applySelectionColor = (colorId: string) => {
@@ -768,9 +834,16 @@ export default function Home() {
     event: ReactPointerEvent<HTMLSpanElement>,
   ) => {
     const selected = selectionWithin(event.currentTarget);
-    setTextSelection(
-      selected ? { verse, reference, ...selected } : null,
-    );
+    if (!selected) {
+      setTextSelection(null);
+      return;
+    }
+
+    const { range, ...selection } = selected;
+    setWholeVerseSelection(null);
+    setToolbarPosition(null);
+    selectionAnchor.current = { kind: "range", range };
+    setTextSelection({ verse, reference, ...selection });
   };
 
   const updateColor = (id: string, changes: Partial<MarkingColor>) => {
@@ -1506,7 +1579,12 @@ export default function Home() {
                       type="button"
                       aria-label={t("chooseMarkingFor", { reference })}
                       title={t("chooseColorForVerse")}
-                      onClick={() => chooseVerseMarking(verse.verse, verse.text, reference)}
+                      onClick={(event) => chooseVerseMarking(
+                        verse.verse,
+                        verse.text,
+                        reference,
+                        event.currentTarget.closest("li") ?? event.currentTarget,
+                      )}
                     >
                       {verse.verse}
                     </button>
@@ -1563,15 +1641,31 @@ export default function Home() {
       </footer> : null}
 
       {textSelection || wholeVerseSelection ? (
-        <div className="selection-toolbar" role="dialog" aria-label={t("markSelectedText")}>
-          <span>{textSelection ? t("markQuote", { quote: `${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}` }) : t("markReference", { reference: wholeVerseSelection?.reference ?? "" })}</span>
-          <div>
+        <div
+          className="selection-toolbar"
+          data-placement={toolbarPosition?.placement ?? "above"}
+          data-positioned={toolbarPosition ? "true" : "false"}
+          ref={selectionToolbar}
+          role="dialog"
+          aria-label={t("markSelectedText")}
+          style={{
+            "--selection-toolbar-left": `${toolbarPosition?.left ?? 0}px`,
+            "--selection-toolbar-top": `${toolbarPosition?.top ?? 0}px`,
+            "--selection-toolbar-arrow": `${toolbarPosition?.arrowLeft ?? 24}px`,
+          } as CSSProperties}
+        >
+          <span className="selection-context">
+            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 15 9-9 4 4-9 9H5v-4Z"/><path d="m12 8 4 4M4 21h16"/></svg>
+            <span>{textSelection ? t("markQuote", { quote: `${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}` }) : t("markReference", { reference: wholeVerseSelection?.reference ?? "" })}</span>
+          </span>
+          <div className="selection-actions">
             {colorMap.get(activeColorId) ? <button className="selection-active-group" type="button" onClick={() => applySelectionColor(activeColorId)}>
               <i style={{ backgroundColor: colorMap.get(activeColorId)?.value }} />
               <span>{colorMap.get(activeColorId)?.name}</span>
             </button> : null}
-            <label className="selection-group-picker">
+            <label className="selection-group-picker" title={t("chooseAnotherGroup")}>
               <span className="sr-only">{t("chooseAnotherGroup")}</span>
+              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="12" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
               <select value="" onChange={(event) => event.target.value && applySelectionColor(event.target.value)}>
                 <option value="" disabled>{t("moreGroups")}</option>
                 {colors.filter((color) => color.id !== activeColorId).map((color) => <option value={color.id} key={color.id}>{color.name}</option>)}
@@ -1579,24 +1673,21 @@ export default function Home() {
             </label>
             {wholeVerseSelection ? <button className="selection-none" type="button" aria-label={t("removeWholeVerseColor", { reference: wholeVerseSelection.reference })} title={t("noWholeVerseColor")} onClick={() => {
               setMarkings((current) => withoutWholeVerseMarking(current, route, wholeVerseSelection.verse));
-              setWholeVerseSelection(null);
-            }}><i />{t("none")}</button> : null}
-            {wholeVerseSelection ? <button className="add-note-from-palette" type="button" onClick={() => {
+              closeSelectionToolbar();
+            }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m6.5 17.5 11-11"/></svg><span>{t("none")}</span></button> : null}
+            {wholeVerseSelection ? <button className="add-note-from-palette" type="button" title={t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")} onClick={() => {
               const selection = wholeVerseSelection;
-              setWholeVerseSelection(null);
+              closeSelectionToolbar();
               openNote(selection.verse, selection.reference);
-            }}>{t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")}</button> : null}
+            }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v13H9l-4 3V4Z"/><path d="M9 8h6M9 12h4"/></svg><span>{t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")}</span></button> : null}
             <button
               className="cancel-selection"
               type="button"
               aria-label={t("cancelMarking")}
-              onClick={() => {
-                setTextSelection(null);
-                setWholeVerseSelection(null);
-                window.getSelection()?.removeAllRanges();
-              }}
+              title={t("cancelMarking")}
+              onClick={closeSelectionToolbar}
             >
-              ×
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
             </button>
           </div>
         </div>

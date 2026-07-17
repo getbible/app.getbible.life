@@ -1444,19 +1444,61 @@ summary:focus-visible {
 .selection-toolbar {
   position: fixed;
   z-index: 60;
-  bottom: 22px;
-  left: 50%;
+  top: var(--selection-toolbar-top);
+  left: var(--selection-toolbar-left);
   display: flex;
-  max-width: calc(100vw - 28px);
+  visibility: hidden;
+  width: max-content;
+  max-width: min(680px, calc(100vw - 20px));
   align-items: center;
-  gap: 14px;
-  padding: 8px 9px 8px 13px;
-  border: 1px solid var(--foreground);
-  border-radius: 7px;
-  background: var(--foreground);
-  color: var(--background);
-  box-shadow: 0 8px 30px rgb(0 0 0 / 22%);
-  transform: translateX(-50%);
+  gap: 12px;
+  padding: 8px;
+  border: 1px solid color-mix(in srgb, var(--foreground) 20%, transparent);
+  border-radius: 13px;
+  background: color-mix(in srgb, var(--background) 84%, transparent);
+  color: var(--foreground);
+  box-shadow:
+    0 18px 48px rgb(0 0 0 / 22%),
+    0 4px 14px rgb(0 0 0 / 14%),
+    inset 0 1px 0 color-mix(in srgb, white 58%, transparent);
+  opacity: 0;
+  backdrop-filter: blur(18px) saturate(145%);
+  -webkit-backdrop-filter: blur(18px) saturate(145%);
+  transform: translateY(4px) scale(0.985);
+  transform-origin: var(--selection-toolbar-arrow) bottom;
+  transition: opacity 120ms ease, transform 150ms ease;
+}
+
+.selection-toolbar[data-positioned="true"] {
+  visibility: visible;
+  opacity: 1;
+  transform: translateY(0) scale(1);
+}
+
+.selection-toolbar[data-placement="below"] {
+  transform-origin: var(--selection-toolbar-arrow) top;
+}
+
+.selection-toolbar::before {
+  position: absolute;
+  z-index: -1;
+  left: calc(var(--selection-toolbar-arrow) - 7px);
+  width: 14px;
+  height: 14px;
+  border: solid color-mix(in srgb, var(--foreground) 20%, transparent);
+  background: color-mix(in srgb, var(--background) 92%, transparent);
+  content: "";
+  transform: rotate(45deg);
+}
+
+.selection-toolbar[data-placement="above"]::before {
+  bottom: -7px;
+  border-width: 0 1px 1px 0;
+}
+
+.selection-toolbar[data-placement="below"]::before {
+  top: -7px;
+  border-width: 1px 0 0 1px;
 }
 
 .note-editor {
@@ -1521,35 +1563,64 @@ summary:focus-visible {
 .note-editor-actions .save-note { border-color: var(--foreground); background: var(--foreground); color: var(--background); }
 .note-editor-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
 
-.selection-toolbar > span {
+.selection-context {
+  display: flex;
   overflow: hidden;
-  max-width: 260px;
+  max-width: 250px;
+  align-items: center;
+  gap: 7px;
+  padding: 0 5px;
+  color: var(--muted);
   font-family: Georgia, "Times New Roman", serif;
   font-size: 11px;
+  line-height: 1.3;
+}
+
+.selection-context > span {
+  overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.selection-toolbar > div {
+.selection-context svg {
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.selection-actions {
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 5px;
 }
 
 .selection-active-group {
   display: flex;
   max-width: 190px;
-  height: 28px;
+  height: 34px;
   align-items: center;
   gap: 6px;
-  padding: 0 8px;
-  border: 1px solid var(--background);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--background);
+  padding: 0 10px;
+  border: 1px solid color-mix(in srgb, var(--foreground) 17%, transparent);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--background) 90%, transparent);
+  color: var(--foreground);
   cursor: pointer;
   font-size: 10px;
   font-weight: 700;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 7%);
+  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
+}
+
+.selection-active-group:hover {
+  border-color: color-mix(in srgb, var(--foreground) 38%, transparent);
+  box-shadow: 0 4px 12px rgb(0 0 0 / 10%);
+  transform: translateY(-1px);
 }
 
 .selection-active-group i {
@@ -1566,16 +1637,42 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
+.selection-group-picker {
+  position: relative;
+  display: flex;
+  height: 34px;
+  align-items: center;
+}
+
+.selection-group-picker svg {
+  position: absolute;
+  z-index: 1;
+  inset-inline-start: 9px;
+  width: 15px;
+  height: 15px;
+  fill: currentColor;
+  opacity: 0.58;
+  pointer-events: none;
+}
+
 .selection-group-picker select {
-  width: min(190px, 34vw);
-  height: 28px;
-  padding: 0 28px 0 8px;
-  border: 1px solid var(--background);
-  border-radius: 4px;
-  background: var(--foreground);
-  color: var(--background);
+  width: min(178px, 34vw);
+  height: 34px;
+  padding-block: 0;
+  padding-inline: 30px 28px;
+  border: 1px solid color-mix(in srgb, var(--foreground) 17%, transparent);
+  border-radius: 8px;
+  background: var(--background);
+  color: var(--foreground);
   cursor: pointer;
   font-size: 10px;
+  font-weight: 650;
+  box-shadow: 0 1px 2px rgb(0 0 0 / 7%);
+}
+
+.selection-group-picker select option {
+  background: var(--background);
+  color: var(--foreground);
 }
 
 .selection-color {
@@ -1619,61 +1716,69 @@ summary:focus-visible {
 
 .selection-none {
   display: flex;
-  height: 24px;
+  height: 34px;
   align-items: center;
-  gap: 4px;
-  padding: 0 6px;
-  border: 1px solid var(--background);
-  border-radius: 4px;
+  gap: 5px;
+  padding: 0 8px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
-  color: var(--background);
+  color: var(--muted);
   cursor: pointer;
   font-size: 9px;
   font-weight: 700;
+  transition: background 120ms ease, color 120ms ease;
 }
 
-.selection-none i {
-  position: relative;
-  display: block;
-  width: 14px;
-  height: 14px;
-  border: 1px solid var(--background);
-  border-radius: 50%;
+.selection-none:hover,
+.add-note-from-palette:hover,
+.cancel-selection:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--foreground);
 }
 
-.selection-none i::after {
-  position: absolute;
-  top: 6px;
-  left: 1px;
-  width: 10px;
-  height: 1px;
-  background: var(--background);
-  content: "";
-  transform: rotate(-45deg);
+.selection-none svg,
+.add-note-from-palette svg,
+.cancel-selection svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
 }
 
 .add-note-from-palette {
-  height: 24px;
+  display: flex;
+  height: 34px;
+  align-items: center;
+  gap: 5px;
   padding: 0 8px;
-  border: 1px solid var(--background);
-  border-radius: 4px;
+  border: 1px solid transparent;
+  border-radius: 8px;
   background: transparent;
-  color: var(--background);
+  color: var(--muted);
   cursor: pointer;
   font-size: 9px;
   font-weight: 700;
   white-space: nowrap;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .cancel-selection {
-  width: 22px;
-  height: 22px;
+  display: grid;
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  place-items: center;
   padding: 0;
   border: 0;
+  border-radius: 8px;
   background: transparent;
-  color: var(--background);
+  color: var(--muted);
   cursor: pointer;
-  font-size: 17px;
+  transition: background 120ms ease, color 120ms ease;
 }
 
 .mobile-navigation {
@@ -1776,9 +1881,28 @@ summary:focus-visible {
   }
 
   .selection-toolbar {
-    bottom: 58px;
+    width: max-content;
+    max-width: calc(100vw - 16px);
     flex-direction: column;
-    gap: 7px;
+    align-items: stretch;
+    gap: 6px;
+    padding: 7px;
+  }
+
+  .selection-context {
+    max-width: calc(100vw - 30px);
+    padding: 2px 6px 0;
+  }
+
+  .selection-actions {
+    max-width: calc(100vw - 30px);
+    overflow-x: auto;
+    padding: 1px;
+    scrollbar-width: none;
+  }
+
+  .selection-actions::-webkit-scrollbar {
+    display: none;
   }
 }
 
@@ -1799,12 +1923,6 @@ summary:focus-visible {
     min-height: 44px;
   }
 
-  .selection-toolbar > div {
-    max-width: calc(100vw - 34px);
-    overflow-x: auto;
-    padding: 5px 1px;
-  }
-
   .selection-color {
     width: 36px;
     min-width: 36px;
@@ -1817,7 +1935,12 @@ summary:focus-visible {
   .add-note-from-palette,
   .cancel-selection {
     min-width: 44px;
-    height: 36px;
+    height: 40px;
+  }
+
+  .selection-none,
+  .add-note-from-palette {
+    justify-content: center;
   }
 
   .color-swatch {
@@ -1868,7 +1991,12 @@ summary:focus-visible {
 
   .drawer,
   .drawer-scrim,
-  .menu-button span {
+  .menu-button span,
+  .selection-toolbar,
+  .selection-active-group,
+  .selection-none,
+  .add-note-from-palette,
+  .cancel-selection {
     transition: none;
   }
 }
