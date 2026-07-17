@@ -46,8 +46,10 @@ import {
   parseMarkingsBackup,
   markedSegments,
   markingMatchesPassage,
+  textSelectionHasMarking,
   translucentColor,
   wholeVerseMarking,
+  withoutTextSelectionMarkings,
   withoutWholeVerseMarking,
 } from "../lib/markings";
 import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyReference } from "../lib/daily";
@@ -92,6 +94,13 @@ interface WholeVerseSelection {
   verse: number;
   text: string;
   reference: string;
+}
+
+interface NoteEditor {
+  passage: Passage;
+  verse: number;
+  reference: string;
+  text: string;
 }
 
 type SelectionAnchor =
@@ -184,7 +193,7 @@ export default function Home() {
   const [markingMessage, setMarkingMessage] = useState("");
   const [notes, setNotes] = useState<VerseNote[]>([]);
   const [studyTab, setStudyTab] = useState<StudyTab>("markings");
-  const [noteEditor, setNoteEditor] = useState<{ verse: number; reference: string; text: string } | null>(null);
+  const [noteEditor, setNoteEditor] = useState<NoteEditor | null>(null);
   const [needsDaily, setNeedsDaily] = useState(false);
   const [pendingVerse, setPendingVerse] = useState<number | null>(null);
   const [markdownMode, setMarkdownMode] = useState(false);
@@ -279,18 +288,13 @@ export default function Home() {
     positionSelectionToolbar();
 
     const reposition = () => positionSelectionToolbar();
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") closeSelectionToolbar();
-    };
     window.addEventListener("resize", reposition);
     window.addEventListener("scroll", reposition, true);
-    window.addEventListener("keydown", closeOnEscape);
     return () => {
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
-      window.removeEventListener("keydown", closeOnEscape);
     };
-  }, [textSelection, wholeVerseSelection, closeSelectionToolbar, positionSelectionToolbar]);
+  }, [textSelection, wholeVerseSelection, positionSelectionToolbar]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -604,15 +608,15 @@ export default function Home() {
         setDrawer(null);
         setSearchOpen(false);
         setInfoModal(null);
-        setTextSelection(null);
-        setWholeVerseSelection(null);
+        setNoteEditor(null);
+        closeSelectionToolbar();
       }
       if (event.altKey && event.key === "ArrowLeft") void turn(-1);
       if (event.altKey && event.key === "ArrowRight") void turn(1);
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [turn]);
+  }, [closeSelectionToolbar, turn]);
 
   useEffect(() => {
     boundaryLock.current = false;
@@ -740,6 +744,15 @@ export default function Home() {
     () => new Map(colors.map((color) => [color.id, color])),
     [colors],
   );
+  const selectedTextIsMarked = textSelection
+    ? textSelectionHasMarking(
+        markings,
+        route,
+        textSelection.verse,
+        textSelection.start,
+        textSelection.end,
+      )
+    : false;
   const sortedNotes = useMemo(() => [...notes].sort(compareNotes), [notes]);
 
   const chapterIndex = chapters.findIndex((item) => item.chapter === route.chapter);
@@ -914,18 +927,18 @@ export default function Home() {
 
   const openNote = (verse: number, reference: string) => {
     const existing = notes.find((note) => noteKey(note) === noteKey({ passage: route, verse }));
-    setNoteEditor({ verse, reference, text: existing?.text ?? "" });
+    setNoteEditor({ passage: route, verse, reference, text: existing?.text ?? "" });
   };
 
   const saveNote = () => {
     if (!noteEditor?.text.trim()) return;
     const now = Date.now();
     setNotes((current) => {
-      const key = noteKey({ passage: route, verse: noteEditor.verse });
+      const key = noteKey(noteEditor);
       const existing = current.find((note) => noteKey(note) === key);
       const note: VerseNote = {
         id: existing?.id ?? identifier(),
-        passage: route,
+        passage: noteEditor.passage,
         verse: noteEditor.verse,
         reference: noteEditor.reference,
         text: noteEditor.text.trim(),
@@ -934,6 +947,13 @@ export default function Home() {
       };
       return [...current.filter((item) => noteKey(item) !== key), note];
     });
+    setNoteEditor(null);
+  };
+
+  const deleteNote = (verse: number, reference: string) => {
+    if (!window.confirm(t("deleteNoteFor", { reference }))) return;
+    const key = noteKey({ passage: route, verse });
+    setNotes((current) => current.filter((note) => noteKey(note) !== key));
     setNoteEditor(null);
   };
 
@@ -1448,7 +1468,7 @@ export default function Home() {
                     setDrawer(null);
                     setPendingVerse(note.verse);
                     if (!noteMatchesPassage(note, route)) go({ ...note.passage, translation: route.translation });
-                    window.setTimeout(() => setNoteEditor({ verse: note.verse, reference: note.reference, text: note.text }), 100);
+                    window.setTimeout(() => setNoteEditor({ passage: note.passage, verse: note.verse, reference: note.reference, text: note.text }), 100);
                   }}>{t("edit")}</button>
                   <button type="button" className="delete-marking" aria-label={t("deleteNoteFor", { reference: note.reference })} onClick={() => {
                     if (window.confirm(t("deleteNoteFor", { reference: note.reference }))) setNotes((current) => current.filter((item) => item.id !== note.id));
@@ -1617,7 +1637,25 @@ export default function Home() {
                         );
                       })}
                     </span>
-                    {verseNote ? <button className="inline-note" type="button" onClick={() => openNote(verse.verse, reference)} aria-label={t("editNoteFor", { reference })}>
+                    {noteEditor && noteKey(noteEditor) === noteKey({ passage: route, verse: verse.verse }) ? <div className="inline-note-editor" role="dialog" aria-label={t("noteFor", { reference })}>
+                      <div className="inline-note-editor-header">
+                        <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v13H9l-4 3V4Z"/><path d="M9 8h6M9 12h4"/></svg>{reference}</span>
+                        <button type="button" aria-label={t("closeNoteEditor")} title={t("closeNoteEditor")} onClick={() => setNoteEditor(null)}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
+                        </button>
+                      </div>
+                      <textarea autoFocus value={noteEditor.text} placeholder={t("writeYourNote")} onChange={(event) => setNoteEditor({ ...noteEditor, text: event.target.value })} onKeyDown={(event) => {
+                        if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) saveNote();
+                      }} />
+                      <div className="inline-note-editor-actions">
+                        {verseNote ? <button className="inline-note-delete" type="button" aria-label={t("deleteNoteFor", { reference })} title={t("delete")} onClick={() => deleteNote(verse.verse, reference)}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M9 7V4h6v3M7 7l1 13h8l1-13M10 11v5M14 11v5"/></svg>
+                        </button> : null}
+                        <button className="inline-note-save" type="button" disabled={!noteEditor.text.trim()} onClick={saveNote}>
+                          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>{t("saveNote")}
+                        </button>
+                      </div>
+                    </div> : verseNote ? <button className="inline-note" type="button" onClick={() => openNote(verse.verse, reference)} aria-label={t("editNoteFor", { reference })}>
                       <span>{t("note")}</span>
                       <p>{verseNote.text}</p>
                     </button> : null}
@@ -1675,6 +1713,16 @@ export default function Home() {
               setMarkings((current) => withoutWholeVerseMarking(current, route, wholeVerseSelection.verse));
               closeSelectionToolbar();
             }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m6.5 17.5 11-11"/></svg><span>{t("none")}</span></button> : null}
+            {textSelection && selectedTextIsMarked ? <button className="selection-none" type="button" aria-label={t("none")} title={t("none")} onClick={() => {
+              setMarkings((current) => withoutTextSelectionMarkings(
+                current,
+                route,
+                textSelection.verse,
+                textSelection.start,
+                textSelection.end,
+              ));
+              closeSelectionToolbar();
+            }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m6.5 17.5 11-11"/></svg><span>{t("none")}</span></button> : null}
             {wholeVerseSelection ? <button className="add-note-from-palette" type="button" title={t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")} onClick={() => {
               const selection = wholeVerseSelection;
               closeSelectionToolbar();
@@ -1692,22 +1740,6 @@ export default function Home() {
           </div>
         </div>
       ) : null}
-
-      {noteEditor ? <div className="note-editor" role="dialog" aria-modal="true" aria-label={t("noteFor", { reference: noteEditor.reference })}>
-        <div className="note-editor-header"><strong>{noteEditor.reference}</strong><button type="button" aria-label={t("closeNoteEditor")} onClick={() => setNoteEditor(null)}>×</button></div>
-        <textarea autoFocus value={noteEditor.text} placeholder={t("writeYourNote")} onChange={(event) => setNoteEditor({ ...noteEditor, text: event.target.value })} />
-        <div className="note-editor-actions">
-          {notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: noteEditor.verse })) ? <button className="delete-note" type="button" onClick={() => {
-            if (window.confirm(t("deleteNoteFor", { reference: noteEditor.reference }))) {
-              const key = noteKey({ passage: route, verse: noteEditor.verse });
-              setNotes((current) => current.filter((note) => noteKey(note) !== key));
-              setNoteEditor(null);
-            }
-          }}>{t("delete")}</button> : null}
-          <button type="button" onClick={() => setNoteEditor(null)}>{t("cancel")}</button>
-          <button className="save-note" type="button" disabled={!noteEditor.text.trim()} onClick={saveNote}>{t("saveNote")}</button>
-        </div>
-      </div> : null}
 
       <nav className="mobile-navigation" aria-label={t("chapterNavigation")}>
         <button type="button" disabled={!canGoPrevious} onClick={() => void turn(-1)}>

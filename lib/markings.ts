@@ -138,6 +138,48 @@ export function withoutWholeVerseMarking(
   );
 }
 
+function textMarkingOverlapsSelection(
+  marking: Marking,
+  passage: Passage,
+  verse: number,
+  start: number,
+  end: number,
+): boolean {
+  return (
+    marking.verse === verse &&
+    marking.start !== null &&
+    marking.end !== null &&
+    passageKey(marking.passage) === passageKey(passage) &&
+    marking.start < end &&
+    marking.end > start
+  );
+}
+
+export function textSelectionHasMarking(
+  markings: Marking[],
+  passage: Passage,
+  verse: number,
+  start: number,
+  end: number,
+): boolean {
+  return markings.some((marking) =>
+    textMarkingOverlapsSelection(marking, passage, verse, start, end),
+  );
+}
+
+export function withoutTextSelectionMarkings(
+  markings: Marking[],
+  passage: Passage,
+  verse: number,
+  start: number,
+  end: number,
+): Marking[] {
+  return markings.filter(
+    (marking) =>
+      !textMarkingOverlapsSelection(marking, passage, verse, start, end),
+  );
+}
+
 export function markedSegments(
   text: string,
   markings: Marking[],

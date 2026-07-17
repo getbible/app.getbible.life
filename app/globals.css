@@ -1337,6 +1337,8 @@ summary:focus-visible {
   color: var(--foreground);
   cursor: pointer;
   text-align: left;
+  transform-origin: top center;
+  animation: inline-note-fold-in 190ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
 .inline-note span {
@@ -1353,6 +1355,17 @@ summary:focus-visible {
   font-size: 11px;
   line-height: 1.45;
   white-space: pre-wrap;
+}
+
+@keyframes inline-note-fold-in {
+  from {
+    opacity: 0;
+    transform: perspective(500px) rotateX(-12deg) scaleY(0.72) translateY(-5px);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(500px) rotateX(0) scaleY(1) translateY(0);
+  }
 }
 
 .verse-text mark {
@@ -1501,67 +1514,138 @@ summary:focus-visible {
   border-width: 1px 0 0 1px;
 }
 
-.note-editor {
-  position: fixed;
-  z-index: 70;
-  top: 50%;
-  left: 50%;
-  display: flex;
-  width: min(560px, calc(100vw - 30px));
-  flex-direction: column;
-  gap: 10px;
-  padding: 14px;
-  border: 1px solid var(--foreground);
-  border-radius: 7px;
-  background: var(--background);
+.inline-note-editor {
+  display: grid;
+  width: calc(100% - 2.35em);
+  gap: 9px;
+  margin-block: 7px 9px;
+  margin-inline-start: 2.35em;
+  padding: 10px;
+  border: 1px solid color-mix(in srgb, var(--foreground) 22%, var(--border));
+  border-inline-start: 3px solid var(--foreground);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--subtle) 86%, var(--background));
   color: var(--foreground);
-  box-shadow: 0 18px 70px rgb(0 0 0 / 30%);
-  transform: translate(-50%, -50%);
+  box-shadow: 0 8px 24px rgb(0 0 0 / 9%), inset 0 1px 0 color-mix(in srgb, white 48%, transparent);
+  font-family: var(--font-geist-sans), Arial, sans-serif;
+  transform-origin: top center;
+  animation: inline-note-unfold 180ms cubic-bezier(0.2, 0.75, 0.25, 1) both;
 }
 
-.note-editor-header,
-.note-editor-actions {
+@keyframes inline-note-unfold {
+  from {
+    opacity: 0;
+    transform: perspective(500px) rotateX(-10deg) scaleY(0.76) translateY(-6px);
+  }
+  to {
+    opacity: 1;
+    transform: perspective(500px) rotateX(0) scaleY(1) translateY(0);
+  }
+}
+
+.inline-note-editor-header,
+.inline-note-editor-actions {
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
-.note-editor-header strong { font-size: 12px; }
-.note-editor-header button {
-  margin-inline-start: auto;
-  border: 0;
-  background: transparent;
-  color: var(--foreground);
-  cursor: pointer;
-  font-size: 18px;
+.inline-note-editor-header span {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 760;
+  letter-spacing: 0.035em;
+  text-transform: uppercase;
 }
 
-.note-editor textarea {
+.inline-note-editor-header svg,
+.inline-note-editor-actions svg {
+  width: 16px;
+  height: 16px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.7;
+}
+
+.inline-note-editor-header button {
+  display: grid;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  margin-inline-start: auto;
+  padding: 0;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.inline-note-editor-header button:hover {
+  background: color-mix(in srgb, var(--foreground) 8%, transparent);
+  color: var(--foreground);
+}
+
+.inline-note-editor textarea {
   width: 100%;
-  min-height: 170px;
+  min-height: 118px;
   resize: vertical;
-  padding: 10px;
+  padding: 11px 12px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 6px;
   background: var(--background);
   color: var(--foreground);
   font: 14px/1.5 var(--font-geist-sans), Arial, sans-serif;
+  box-shadow: inset 0 1px 3px rgb(0 0 0 / 6%);
 }
 
-.note-editor-actions { justify-content: flex-end; }
-.note-editor-actions button {
-  height: 32px;
-  padding: 0 10px;
+.inline-note-editor-actions {
+  justify-content: flex-end;
+}
+
+.inline-note-editor-actions button {
+  display: flex;
+  height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 11px;
   border: 1px solid var(--border);
-  border-radius: 4px;
+  border-radius: 7px;
   background: var(--background);
   color: var(--foreground);
   cursor: pointer;
   font-size: 10px;
+  font-weight: 720;
 }
-.note-editor-actions .delete-note { margin-inline-end: auto; color: #b42318; }
-.note-editor-actions .save-note { border-color: var(--foreground); background: var(--foreground); color: var(--background); }
-.note-editor-actions button:disabled { opacity: 0.35; cursor: not-allowed; }
+
+.inline-note-editor-actions .inline-note-delete {
+  width: 34px;
+  margin-inline-end: auto;
+  padding: 0;
+  border-color: color-mix(in srgb, #b42318 30%, var(--border));
+  color: #b42318;
+}
+
+.inline-note-editor-actions .inline-note-delete:hover {
+  background: color-mix(in srgb, #b42318 9%, var(--background));
+}
+
+.inline-note-editor-actions .inline-note-save {
+  border-color: var(--foreground);
+  background: var(--foreground);
+  color: var(--background);
+}
+
+.inline-note-editor-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.35;
+}
 
 .selection-context {
   display: flex;
@@ -1904,6 +1988,11 @@ summary:focus-visible {
   .selection-actions::-webkit-scrollbar {
     display: none;
   }
+
+  .inline-note-editor {
+    width: 100%;
+    margin-inline-start: 0;
+  }
 }
 
 @media (pointer: coarse) {
@@ -1921,6 +2010,12 @@ summary:focus-visible {
   .remove-color,
   .delete-marking {
     min-height: 44px;
+  }
+
+  .inline-note-editor-header button,
+  .inline-note-editor-actions button {
+    min-width: 44px;
+    height: 44px;
   }
 
   .selection-color {
@@ -1996,7 +2091,10 @@ summary:focus-visible {
   .selection-active-group,
   .selection-none,
   .add-note-from-palette,
-  .cancel-selection {
+  .cancel-selection,
+  .inline-note,
+  .inline-note-editor {
     transition: none;
+    animation: none;
   }
 }

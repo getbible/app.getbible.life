@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, resolvedLanguageName, translationLanguage, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
-import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, translucentColor, wholeVerseMarking, withoutWholeVerseMarking } from "../lib/markings.ts";
+import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, textSelectionHasMarking, translucentColor, wholeVerseMarking, withoutTextSelectionMarkings, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { floatingToolbarPosition } from "../lib/floating-toolbar.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
@@ -104,6 +104,22 @@ test("removes a whole-verse color across translations without removing word high
   const whole = { id: "whole", passage: { ...passage, translation: "aov" }, verse: 16, start: null, end: null, quote: "Verse", colorId: "yellow", createdAt: 1 };
   const word = { ...whole, id: "word", passage, start: 0, end: 4, quote: "Word" };
   assert.deepEqual(withoutWholeVerseMarking([whole, word], passage, 16).map((marking) => marking.id), ["word"]);
+});
+
+test("detects and removes selected-text highlights without affecting other markings", () => {
+  const passage = { translation: "kjv", book: 43, chapter: 3 };
+  const selected = { id: "selected", passage, verse: 16, start: 4, end: 7, quote: "God", colorId: "yellow", createdAt: 1 };
+  const adjacent = { ...selected, id: "adjacent", start: 8, end: 10, quote: "so" };
+  const otherTranslation = { ...selected, id: "other", passage: { ...passage, translation: "aov" } };
+  const whole = { ...selected, id: "whole", start: null, end: null, quote: "For God so loved" };
+  const markings = [selected, adjacent, otherTranslation, whole];
+
+  assert.equal(textSelectionHasMarking(markings, passage, 16, 4, 7), true);
+  assert.equal(textSelectionHasMarking(markings, passage, 16, 0, 3), false);
+  assert.deepEqual(
+    withoutTextSelectionMarkings(markings, passage, 16, 4, 7).map((marking) => marking.id),
+    ["adjacent", "other", "whole"],
+  );
 });
 
 test("splits overlapping text markings deterministically", () => {
@@ -276,6 +292,15 @@ test("defaults new readers to full width and offers Bible reading fonts", () => 
 test("keeps full-width reading edge-to-edge on narrow screens", () => {
   const styles = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
   assert.match(styles, /@media \(max-width: 720px\)[\s\S]*?\.reading-stage \{\s*padding: 8px clamp\(28px, 3vw, 54px\) 78px;\s*\}[\s\S]*?\.reading-stage\[data-reading-width="full"\] \{\s*padding-inline: 3px;\s*\}/);
+});
+
+test("edits verse notes inline instead of opening a fixed modal", () => {
+  const page = readFileSync(new URL("../app/page.tsx", import.meta.url), "utf8");
+  const styles = readFileSync(new URL("../app/globals.css", import.meta.url), "utf8");
+  assert.match(page, /className="inline-note-editor"/);
+  assert.doesNotMatch(page, /className="note-editor"/);
+  assert.match(styles, /\.inline-note-editor \{[\s\S]*?animation: inline-note-unfold/);
+  assert.doesNotMatch(styles, /\.note-editor \{/);
 });
 
 test("offers stable light and dark reading palettes", () => {
