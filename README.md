@@ -17,7 +17,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - Long-term verse notes with Bible-order navigation; backups include notes, markings, and custom color groups.
 - Verse notes and whole-verse markings follow the canonical book/chapter/verse across translations; selected word and phrase markings remain translation-specific.
 - The visible reading position is remembered down to the verse and restored on the next visit.
-- First-time readers open the daily Scripture in King James Version; clicking `getBible.Life` returns to that day’s cached verse in KJV.
+- First-time readers open the daily Scripture in King James Version; clicking `getBible.Life` returns to that day’s cached verse in KJV. Source book aliases are resolved through Query v3 when they differ from the Bible catalogue’s canonical names.
 - Full-screen-width reading by default, optional page width, nine selectable reading fonts, edge-to-edge mobile reading, and touch-sized controls.
 - A glasses button opens the current chapter as Markdown with an H1 chapter heading, valid ordered-list verses, Copy and Download `.md` actions, and the translation’s full name plus copyright/license notice in the footer.
 - A muted desktop-only end-of-chapter footer links the current passage to `getbible.life` and displays the dynamically current Vast Development Method copyright year.
@@ -40,7 +40,7 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 
 - Source v3 tokens and spans add supplied-word italics, Jesus quotations, lexical details, source notes, and clickable references without changing verse text or saved selection offsets. Source headings and paragraph boundaries are optional.
 - Click a word for dictionaries and a search action; double-click, drag, and long-press selection remain available for personal highlights. Selected phrases also have Search, Study, and Reference actions.
-- Dictionaries use language and Strong’s identifiers to choose a default, remember resource preferences, and load exact indexed entries only as selected. Multiple definitions and related entries stay available.
+- Dictionaries match headwords, aliases, and published entry IDs without case or accent sensitivity, retaining the Strong’s default for supplied lexical tokens. The reader prepares a reusable index in the background; the dropdown contains only dictionaries with confirmed nonempty definitions for the selection. Multiple definitions and related entries stay available.
 - Chapter and verse commentaries use published coverage lists, include book/chapter introductions, and link structured citations to a [Query v3](https://getbible.net/api/query/v3.md) modal without changing the reading position.
 - Shared bookmark topics can be browsed, localized, previewed, and merged into stable local marking groups without duplicate imports. Personal highlights take visual priority and do not erase topic memberships.
 - Explicit full-translation, dictionary, commentary, and bookmark-catalog downloads support offline reading. A versioned service worker preserves the reader shell, local fonts, and language packs after a successful online installation.
