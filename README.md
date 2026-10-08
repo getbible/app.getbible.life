@@ -113,7 +113,7 @@ Offline shell manifests are generated from the actual production assets after co
 
 Built-in bookmark topics come from the getBible Bookmarks API. New readers start with the global topics, and can download all global bookmarks or one topic at a time in the same list used for personal bookmarks. Existing readers are offered a migration that merges matching names, aliases and localized topics while preserving custom topics and personal data. Downloaded entries carry a G badge and can be removed without deleting personal bookmarks. Topic names and colors remain editable, and backups preserve global provenance. Browser storage saves topics and bookmarks together as one atomic snapshot.
 
-The translated Verified explanation links to the Bible API documentation, and translation information includes a small linked getBible infrastructure credit. Jesus speaker metadata supplies red text without a redundant speaker annotation; other source metadata remains visible.
+The translated Verified explanation links to the Bible API documentation, and translation information includes a padded getBible credit with its official icon, “The Word for the world!” slogan, and an API attribution. Commentary, dictionary, and annotation controls appear below Scripture. Jesus speaker metadata supplies red text without a redundant speaker annotation; other source metadata remains visible.
 
 ## Interface localization
 

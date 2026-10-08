@@ -1368,7 +1368,7 @@ export default function Home() {
               {translationHistory.length ? <section><h3>{t("translationHistory")}</h3><ol className="translation-history">
                 {translationHistory.map(([version, description]) => <li key={version}><strong>{version.replace(/^history_/, "")}</strong><span>{description}</span></li>)}
               </ol></section> : null}
-              <InfrastructureCredit message={t("builtUponInfrastructure")} />
+              <InfrastructureCredit message={t("poweredByApis")} slogan={t("getBibleSlogan")} />
             </> : <div className="sync-information">
               <p>{rich("syncParagraph1", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
               <p>{rich("syncParagraph2", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
@@ -1803,11 +1803,6 @@ export default function Home() {
               <button type="button" aria-label={t("closeVerification")} onClick={() => setVerifiedInfo(false)}>×</button>
             </div> : null}
 
-            <div className="reader-tool-actions">
-              <button type="button" onClick={() => openStudy()}>Chapter commentary</button>
-              <button type="button" onClick={() => openStudy({ word: "" })}>Dictionary</button>
-              <label><input type="checkbox" checked={annotationsEnabled} onChange={(event) => setAnnotationsEnabled(event.target.checked)} /> Study annotations</label>
-            </div>
             {annotationsEnabled && (passage.introduction?.length || passage.titles?.length) ? <details className="chapter-source-introduction"><summary>About this chapter</summary>
               {passage.titles?.map((title, index) => <p key={`title-${index}`}><strong>{title.text}</strong></p>)}
               {passage.introduction?.map((entry, index) => <p key={index}>{entry.text}</p>)}
@@ -1890,6 +1885,12 @@ export default function Home() {
                 );
               })}
             </ol>
+
+            <div className="reader-tool-actions" role="group" aria-label={t("studyTools")}>
+              <button type="button" onClick={() => openStudy()}>Chapter commentary</button>
+              <button type="button" onClick={() => openStudy({ word: "" })}>Dictionary</button>
+              <label><input type="checkbox" checked={annotationsEnabled} onChange={(event) => setAnnotationsEnabled(event.target.checked)} /> Study annotations</label>
+            </div>
 
             <footer className="passage-footer">
               {translation ? <button className="translation-details-button" type="button" aria-haspopup="dialog" onClick={() => setInfoModal("translation")}>
