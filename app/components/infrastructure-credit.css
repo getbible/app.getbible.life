@@ -1,23 +1,46 @@
 .infrastructure-credit {
-  margin-top: 26px;
-  padding-top: 13px;
-  border-top: 1px solid var(--border);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin-top: 28px;
+  padding: 20px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--subtle);
   color: var(--muted);
   font-size: 12px;
-  line-height: 1.7;
+  line-height: 1.6;
 }
 .infrastructure-credit p { margin: 0; }
-.infrastructure-credit a {
-  display: inline-flex;
+.infrastructure-credit-logo-plate {
+  display: flex;
   align-items: center;
-  gap: 5px;
+  justify-content: center;
+  flex: none;
+  padding: 4px;
+  border: 1px solid #e6e1d7;
+  border-radius: 6px;
+  background: #f8f7f3;
+}
+.infrastructure-credit-logo { flex: none; width: 40px; height: 40px; }
+.infrastructure-credit-copy { min-width: 0; }
+.infrastructure-credit .infrastructure-credit-slogan {
+  margin-bottom: 4px;
+  color: var(--foreground);
+  font-size: 14px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.infrastructure-credit a {
   color: inherit;
   text-decoration: underline;
   text-decoration-color: var(--border);
   text-underline-offset: 3px;
   white-space: nowrap;
-  vertical-align: middle;
 }
 .infrastructure-credit a:hover { color: var(--foreground); text-decoration-color: currentColor; }
 .infrastructure-credit a:focus-visible { outline: 2px solid var(--foreground); outline-offset: 4px; border-radius: 2px; }
-.infrastructure-credit img { flex: none; }
+@media (max-width: 400px) {
+  .infrastructure-credit { gap: 12px; padding: 20px 16px; }
+  .infrastructure-credit-logo { width: 32px; height: 32px; }
+}

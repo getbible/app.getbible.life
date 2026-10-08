@@ -198,7 +198,8 @@ export const ENGLISH_UI_MESSAGES = {
   chapterCopied: "Chapter copied.",
   copyUnavailable: "Copy is unavailable in this browser. Select the text and copy it manually.",
   markdownCreated: "Markdown file created.",
-  builtUponInfrastructure: "Built upon {getBible} infrastructure.",
+  poweredByApis: "Powered by {getBible} APIs.",
+  getBibleSlogan: "The Word for the world!",
 } as const;
 
 export type UiMessageKey = keyof typeof ENGLISH_UI_MESSAGES;
