@@ -68,11 +68,14 @@ export class StudyApiError extends Error {
 const memory = new Map<string, { value: unknown; savedAt: number }>();
 const corpusMemory = new Map<string, unknown>();
 const corpusReads = new Map<string, Promise<unknown | null>>();
+const activeRequests = new Set<AbortController>();
+let cacheGeneration = 0;
 const MEMORY_TTL = 5 * 60 * 1_000;
 const MEMORY_LIMIT = 24;
 const CORPUS_LIMIT = 2;
 const aborted = (signal?: AbortSignal) => { if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError"); };
 function rememberDocument(url: string, value: unknown) {
+  for (const [key, document] of memory) if (Date.now() - document.savedAt >= MEMORY_TTL) memory.delete(key);
   memory.delete(url); memory.set(url, { value, savedAt: Date.now() });
   while (memory.size > MEMORY_LIMIT) memory.delete(memory.keys().next().value!);
 }
@@ -92,6 +95,7 @@ async function store(): Promise<Cache | null> {
   try { return typeof caches !== "undefined" ? await caches.open(STUDY_CACHE_NAME) : null; } catch { return null; }
 }
 async function saved<T>(url: string, corpus = false): Promise<T | null> {
+  const generation = cacheGeneration;
   if (corpusMemory.has(url)) {
     const value = corpusMemory.get(url) as T;
     rememberCorpus(url, value);
@@ -102,18 +106,20 @@ async function saved<T>(url: string, corpus = false): Promise<T | null> {
     try {
       const response = await (await store())?.match(url);
       const value = response ? await response.json() as T : null;
+      if (generation !== cacheGeneration) return null;
       if (value && corpus) rememberCorpus(url, value);
       return value;
     } catch { return null; }
   };
   if (!corpus) return read();
-  const pending = read().finally(() => { corpusReads.delete(url); });
+  const pending = read().finally(() => { if (generation === cacheGeneration) corpusReads.delete(url); });
   corpusReads.set(url, pending);
   return pending;
 }
 async function network<T>(url: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal, timeout = 45_000, noStore = false): Promise<T> {
   aborted(signal);
   const controller = new AbortController();
+  activeRequests.add(controller);
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   let timedOut = false;
@@ -128,9 +134,10 @@ async function network<T>(url: string, consume: (response: Response) => Promise<
     aborted(signal);
     if (timedOut) throw new StudyApiError("The study request timed out. Please try again.");
     throw error;
-  } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); }
+  } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); activeRequests.delete(controller); }
 }
 async function request<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const generation = cacheGeneration;
   aborted(signal);
   const recent = memory.get(url);
   if (recent && Date.now() - recent.savedAt < MEMORY_TTL) { memory.delete(url); memory.set(url, recent); return recent.value as T; }
@@ -138,6 +145,7 @@ async function request<T>(url: string, signal?: AbortSignal): Promise<T> {
     const { value, cacheResponse } = await network(url, async (response) => ({ cacheResponse: response.clone(), value: await response.json() as T }), signal);
     if (!value || typeof value !== "object") throw new StudyApiError("The study resource returned an invalid document.");
     aborted(signal);
+    if (generation !== cacheGeneration) throw new DOMException("Request cancelled", "AbortError");
     rememberDocument(url, value);
     try { await (await store())?.put(url, cacheResponse); } catch { /* Reading still works when storage is full or unavailable. */ }
     return value;
@@ -308,6 +316,8 @@ export async function removeStudyDownload(kind: ResourceKind, id: string): Promi
   await (await store())?.delete(url); memory.delete(url); corpusMemory.delete(url);
 }
 export async function clearStudyCache(): Promise<void> {
+  cacheGeneration += 1;
+  for (const controller of activeRequests) controller.abort();
   memory.clear(); corpusMemory.clear(); corpusReads.clear();
   if (typeof caches !== "undefined") await caches.delete(STUDY_CACHE_NAME);
   try {
@@ -318,6 +328,7 @@ export async function clearStudyCache(): Promise<void> {
 
 /** Store the whole published document atomically only after SHA-256 verification. */
 async function download<T>(root: string, path: string, manifestPath: string, signal?: AbortSignal): Promise<T> {
+  const generation = cacheGeneration;
   const cache = await store();
   if (!cache) throw new StudyApiError("Offline storage is unavailable in this browser.");
   if (!globalThis.crypto?.subtle) throw new StudyApiError("This browser cannot verify offline downloads.");
@@ -335,6 +346,7 @@ async function download<T>(root: string, path: string, manifestPath: string, sig
     }
     const value = JSON.parse(new TextDecoder().decode(bytes)) as T;
     aborted(signal);
+    if (generation !== cacheGeneration) throw new DOMException("Request cancelled", "AbortError");
     await cache.put(url, new Response(bytes, { headers: { "content-type": "application/json", "x-getbible-sha256": digest } }));
     rememberCorpus(url, value);
     return value;
