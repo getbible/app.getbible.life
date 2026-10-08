@@ -79,6 +79,20 @@ self.addEventListener("activate", (event) => {
   })());
 });
 
+self.addEventListener("message", (event) => {
+  const port = event.ports?.[0];
+  if (event.data?.type !== "getbible-offline-ready" || !port) return;
+  event.waitUntil((async () => {
+    let ready = false;
+    try {
+      const cache = await caches.open(CACHE_NAME);
+      const stored = new Set((await cache.keys()).map((request) => new URL(request.url).pathname));
+      ready = [...ASSETS].every((path) => stored.has(path));
+    } catch { /* Report storage failures without interrupting online reading. */ }
+    port.postMessage({ type: "getbible-offline-ready", ready, version: manifest.version });
+  })());
+});
+
 async function navigation(request) {
   let cache;
   try { cache = await caches.open(CACHE_NAME); } catch { return fetch(request); }

@@ -151,7 +151,7 @@ export const ENGLISH_UI_MESSAGES = {
   downloadMarkdown: "Download .md",
   verified: "verified",
   saved: "saved",
-  verifiedExplanation: "Verified means this chapter’s hash is in sync with the CrossWire source modules used by the GetBible API.",
+  verifiedExplanation: "Verified means this chapter’s hash is in sync with the CrossWire source modules used by the {getBibleApi}.",
   savedExplanation: "Saved means this chapter is shown from your browser cache and could not currently be checked against the CrossWire source modules.",
   closeVerification: "Close verification explanation",
   chooseMarkingFor: "Choose marking color for {reference}",
@@ -198,6 +198,7 @@ export const ENGLISH_UI_MESSAGES = {
   chapterCopied: "Chapter copied.",
   copyUnavailable: "Copy is unavailable in this browser. Select the text and copy it manually.",
   markdownCreated: "Markdown file created.",
+  builtUponInfrastructure: "Built upon {getBible} infrastructure.",
 } as const;
 
 export type UiMessageKey = keyof typeof ENGLISH_UI_MESSAGES;

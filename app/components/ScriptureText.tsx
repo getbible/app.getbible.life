@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useState, type CSSProperties, type ReactNode } from "react";
 import type { Verse } from "../../lib/getbible";
 import type { Marking, MarkingColor } from "../../lib/markings";
 import type { MatchMode } from "../../lib/search";
@@ -43,7 +43,7 @@ export function ScriptureText({ verse, markings, colors, search, onWord, enabled
       if (segment.searched) part = <span className="search-arrival-word">{part}</span>;
       const color = segment.colorId ? colors.get(segment.colorId) : undefined;
       return color
-        ? <mark key={segment.start} style={{ backgroundColor: color.value }}>{part}</mark>
+        ? <mark key={segment.start} className="scripture-mark" style={{ "--marking-color": color.value } as CSSProperties}>{part}</mark>
         : <span key={segment.start}>{part}</span>;
     });
     if (!word) return <span key={first.start}>{content}</span>;

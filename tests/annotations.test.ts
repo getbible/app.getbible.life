@@ -88,16 +88,39 @@ test("speaker and reference source details remain separate from scripture text",
     tokens: [],
     spans: [
       { tag: "q", span: "For God", token_start: 0, token_end: 0, word_start: 1, word_end: 2, attrs: { who: "Jesus" } },
+      { tag: "q", span: "For God", token_start: 0, token_end: 0, word_start: 1, word_end: 2, attrs: { who: "Moses" } },
       { tag: "note", span: "Compare another passage.", token_start: 0, token_end: 0, word_start: 0, word_end: 0, attrs: { osisRef: "John.1.1" } },
       { tag: "reference", span: "Unsafe link", token_start: 0, token_end: 0, word_start: 0, word_end: 0, attrs: { target: "javascript:alert(1)" } },
     ],
   };
   assert.equal(buildAnnotatedSegments(source).map((segment) => segment.text).join(""), "For God");
   const annotations = verseSourceAnnotations(source);
-  assert.equal(annotations[0].label, "Speaker: Jesus");
+  assert.equal(annotations[0].label, "Speaker: Moses");
   assert.equal(annotations[0].text, "");
   assert.deepEqual(annotations[1].references, ["John.1.1"]);
   assert.deepEqual(annotations[2].references, []);
+});
+
+test("Jesus remains red without a speaker annotation or tooltip while lexical and reference details survive", () => {
+  const source: AnnotatedVerse = {
+    ...verse("For God"),
+    tokens: [{ token: "God", word_start: 2, word_end: 2, lemma: { strong: ["G2316"] }, morph: { robinson: ["N-NSM"] } }],
+    spans: [
+      { tag: "q", span: "For God", token_start: 0, token_end: 0, word_start: 1, word_end: 2, attrs: { who: " #jEsUs " } },
+      { tag: "q", span: "Unlocated speech", token_start: 0, token_end: 0, word_start: 0, word_end: 0, attrs: { who: "Jesus" } },
+      { tag: "note", span: "Compare the opening chapter.", token_start: 0, token_end: 0, word_start: 0, word_end: 0, attrs: { who: "Jesus", osisRef: "John.1.1" } },
+    ],
+  };
+  const god = buildAnnotatedSegments(source).find((segment) => segment.text === "God");
+  assert.deepEqual(annotationClasses(god?.spans ?? []), ["scripture-jesus"]);
+  assert.deepEqual(spanDetails(god?.spans ?? []), []);
+  assert.deepEqual(strongIdentifiers(god?.tokens ?? []), ["G2316"]);
+  assert.deepEqual(tokenDetails(god?.tokens ?? []), ["Lemma (strong): G2316", "Morphology (robinson): N-NSM"]);
+  const annotations = verseSourceAnnotations(source);
+  assert.equal(annotations.length, 1);
+  assert.equal(annotations[0].label, "Reference");
+  assert.equal(annotations[0].text, "Compare the opening chapter.");
+  assert.deepEqual(annotations[0].references, ["John.1.1"]);
 });
 
 test("editorial headings stay ordered at their anchored verses and paragraphs use emitted numbering", () => {

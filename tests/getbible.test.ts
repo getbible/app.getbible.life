@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, resolvedLanguageName, translationLanguage, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
-import { DEFAULT_MARKING_COLORS, compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, textSelectionHasMarking, translucentColor, wholeVerseMarking, withoutTextSelectionMarkings, withoutWholeVerseMarking } from "../lib/markings.ts";
+import { compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, textSelectionHasMarking, translucentColor, wholeVerseMarking, withoutTextSelectionMarkings, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { floatingToolbarPosition } from "../lib/floating-toolbar.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
 import { compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes.ts";
@@ -147,14 +147,6 @@ test("sorts markings in canonical Bible order", () => {
   assert.deepEqual(markings.sort(compareMarkings).map((marking) => marking.id), ["ot-first", "ot-later", "nt"]);
 });
 
-test("loads the complete deployment marking configuration", () => {
-  assert.equal(DEFAULT_MARKING_COLORS.length, 60);
-  assert.equal(new Set(DEFAULT_MARKING_COLORS.map((color) => color.id)).size, 60);
-  assert.equal(DEFAULT_MARKING_COLORS[0].name, "Adultery");
-  assert.equal(DEFAULT_MARKING_COLORS.at(-1)?.name, "Worldly Wisdom");
-  assert.ok(DEFAULT_MARKING_COLORS.every((color) => /^#[0-9a-f]{6}$/i.test(color.value)));
-});
-
 test("merges imported colors and markings without duplicates", () => {
   const passage = { translation: "kjv", book: 43, chapter: 3 };
   const existing = { id: "same", passage, verse: 16, start: null, end: null, quote: "For God", colorId: "yellow", createdAt: 1 };
@@ -189,7 +181,7 @@ test("parses and date-checks daily Scripture responses", () => {
     date: "Wednesday 15-July, 2026",
     getbible: "https://getbible.life/kjv/John/3/16",
   });
-  assert.deepEqual(daily, { date: "Wednesday 15-July, 2026", translation: "kjv", bookName: "John", chapter: 3, verse: 16 });
+  assert.deepEqual(daily, { date: "Wednesday 15-July, 2026", translation: "kjv", bookName: "John", chapter: 3, verse: 16, verses: [16] });
   assert.equal(dailyDateKey(daily.date), "2026-07-15");
   assert.equal(dailyIsCurrent(daily.date, new Date(2026, 6, 15, 12)), true);
   assert.equal(dailyIsCurrent(daily.date, new Date(2026, 6, 16, 12)), false);

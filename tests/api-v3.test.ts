@@ -41,7 +41,7 @@ async function environment(t:{after:(fn:()=>void|Promise<void>)=>void},handler:(
     clear:()=>items.clear(),key:(index:number)=>[...items.keys()][index] ?? null,get length(){return items.size;},
   };
   const cacheStorage={
-    open:async()=>({match:async(key:string)=>responses.get(key)?.clone(),put:async(key:string,response:Response)=>{responses.set(key,response.clone());}}),
+    open:async()=>({match:async(key:string)=>responses.get(key)?.clone(),put:async(key:string,response:Response)=>{responses.set(key,response.clone());},keys:async()=>[...responses.keys()].map(url=>new Request(url))}),
     delete:async(name:string)=>{cacheDeletes.push(name);responses.clear();return true;},
   };
   Object.defineProperty(globalThis,"localStorage",{value:storage,writable:true,configurable:true});
@@ -158,6 +158,61 @@ test("one full translation download serves offline chapters and indexes with edi
   env.items.set("getbible-reader:meta:api-v3",JSON.stringify(meta));
   globalThis.fetch=async()=>{throw new Error("Offline");};
   const offline=await chapter("kjv",43,3);assert.equal(offline.cached,true);assert.equal(offline.verified,false);assert.deepEqual(offline.data.editorial,passage.editorial);
+});
+
+test("a downloaded translation boots without the separately cached translation catalogue",async(t)=>{
+  const env=await environment(t,(url)=>url.endsWith(".sha")?new Response(sha):new Response(source));
+  await fullTranslation("kjv",sha);
+  const previousNavigator=Object.getOwnPropertyDescriptor(globalThis,"navigator");
+  Object.defineProperty(globalThis,"navigator",{value:{onLine:false},configurable:true});
+  t.after(()=>{if(previousNavigator) Object.defineProperty(globalThis,"navigator",previousNavigator);else Reflect.deleteProperty(globalThis,"navigator");});
+  env.calls.length=0;
+  const meta=JSON.parse(env.items.get("getbible-reader:meta:api-v3")!);meta.fullChecked.kjv=0;
+  env.items.set("getbible-reader:meta:api-v3",JSON.stringify(meta));
+  const catalogue=await translations();
+  assert.equal(catalogue.data.kjv.translation,"King James Version");
+  assert.equal(catalogue.data.kjv.sha,sha);
+  assert.equal("books" in catalogue.data.kjv,false);
+  assert.equal(catalogue.verified,false);
+  assert.equal((await books("kjv")).data["43"].name,"John");
+  assert.equal((await chapters("kjv",43)).data["3"].chapter,3);
+  assert.deepEqual((await chapter("kjv",43,3)).data.editorial,passage.editorial);
+  assert.deepEqual(env.calls,[]);
+});
+
+test("a cold offline reader recovers persisted corpuses after catalogue and metadata eviction",async(t)=>{
+  const env=await environment(t,(url)=>url.endsWith(".sha")?new Response(sha):new Response(source));
+  await fullTranslation("kjv",sha);
+  env.items.clear();
+  const previousNavigator=Object.getOwnPropertyDescriptor(globalThis,"navigator");
+  Object.defineProperty(globalThis,"navigator",{value:{onLine:false},configurable:true});
+  t.after(()=>{if(previousNavigator) Object.defineProperty(globalThis,"navigator",previousNavigator);else Reflect.deleteProperty(globalThis,"navigator");});
+  env.calls.length=0;
+  const coldModule=new URL("../lib/cache.ts",import.meta.url);coldModule.searchParams.set("restart",String(Date.now()));
+  const cold=await import(coldModule.href) as typeof import("../lib/cache.ts");
+  const catalogue=await cold.translations();
+  assert.equal(catalogue.data.kjv.abbreviation,"kjv");
+  assert.equal(catalogue.persisted,true);
+  assert.equal(catalogue.verified,false);
+  assert.equal(await cold.fullTranslationAvailable("kjv"),true);
+  assert.equal((await cold.books("kjv")).data["1000001"].name,"Additional book");
+  assert.equal((await cold.chapters("kjv",43)).data["3"].chapter,3);
+  assert.deepEqual((await cold.chapter("kjv",43,3)).data.verses[0].tokens,verse.tokens);
+  assert.deepEqual(env.calls,[]);
+});
+
+test("translation catalogue failures fall back to downloaded source metadata",async(t)=>{
+  let disconnected=false;
+  const env=await environment(t,(url)=>{
+    if(disconnected) throw new Error("Connection lost");
+    return url.endsWith(".sha")?new Response(sha):new Response(source);
+  });
+  await fullTranslation("kjv",sha);disconnected=true;
+  const catalogue=await translations();
+  assert.equal(catalogue.data.kjv.abbreviation,"kjv");
+  assert.equal(catalogue.cached,true);
+  assert.equal(catalogue.verified,false);
+  assert.equal(env.calls.at(-1),`${API_ROOT}/translations.json`);
 });
 
 test("exact source-byte hash mismatch does not install an unverified translation",async(t)=>{

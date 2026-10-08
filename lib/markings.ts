@@ -1,11 +1,12 @@
 import type { Passage } from "./getbible";
 import type { VerseNote } from "./notes";
-import { DEPLOYMENT_MARKING_COLORS } from "../config/reader.ts";
 
 export interface MarkingColor {
   id: string;
   name: string;
   value: string;
+  /** A topic can retain its original local ID and custom color after migration. */
+  source?: { type: "shared-bookmark"; topicId: string };
 }
 
 export interface Marking {
@@ -37,8 +38,6 @@ export function compareMarkings(left: Marking, right: Marking): number {
     left.createdAt - right.createdAt
   );
 }
-
-export const DEFAULT_MARKING_COLORS: MarkingColor[] = DEPLOYMENT_MARKING_COLORS;
 
 export interface MarkingsBackup {
   version: 1 | 2;
@@ -91,7 +90,7 @@ export function parseMarkingsBackup(value: unknown): MarkingsBackup {
   if ((backup.version !== 1 && backup.version !== 2) || !Array.isArray(backup.colors) || !Array.isArray(backup.markings)) {
     throw new Error("This markings backup has an unsupported format.");
   }
-  const colorsValid = backup.colors.every((color) => color && typeof color.id === "string" && typeof color.name === "string" && /^#[0-9a-f]{6}$/i.test(color.value));
+  const colorsValid = backup.colors.every((color) => color && typeof color.id === "string" && typeof color.name === "string" && /^#[0-9a-f]{6}$/i.test(color.value) && (color.source === undefined || validSharedBookmarkTopicSource(color.source)));
   const markingsValid = backup.markings.every((marking) => marking && typeof marking.id === "string" && typeof marking.colorId === "string" && typeof marking.verse === "number" && typeof marking.quote === "string" && typeof marking.createdAt === "number" && marking.passage && typeof marking.passage.translation === "string" && typeof marking.passage.book === "number" && typeof marking.passage.chapter === "number" && (marking.source === undefined || validSharedBookmarkSource(marking)));
   const notesValid = backup.notes === undefined || (Array.isArray(backup.notes) && backup.notes.every((note) => note && typeof note.id === "string" && typeof note.text === "string" && typeof note.verse === "number" && typeof note.reference === "string" && typeof note.createdAt === "number" && typeof note.updatedAt === "number" && note.passage && typeof note.passage.translation === "string" && typeof note.passage.book === "number" && typeof note.passage.chapter === "number"));
   if (!colorsValid || !markingsValid || !notesValid) throw new Error("This markings backup contains invalid data.");
@@ -115,11 +114,17 @@ export function markingMatchesPassage(
     : passageKey(marking.passage) === passageKey(passage);
 }
 
+function validSharedBookmarkTopicSource(source: unknown): source is NonNullable<MarkingColor["source"]> {
+  if (!source || typeof source !== "object") return false;
+  const value = source as Partial<NonNullable<MarkingColor["source"]>>;
+  return value.type === "shared-bookmark" && typeof value.topicId === "string" &&
+    value.topicId.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(value.topicId);
+}
+
 function validSharedBookmarkSource(marking: Marking): boolean {
-  const source = marking.source;
-  return !!source && typeof source === "object" && source.type === "shared-bookmark" &&
-    typeof source.topicId === "string" && source.topicId.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(source.topicId) &&
-    marking.colorId === `getbible-topic:${source.topicId}` && marking.start === null && marking.end === null;
+  // Migrated topics retain local group IDs, so provenance belongs to the mark
+  // itself rather than being inferred from its color ID.
+  return validSharedBookmarkTopicSource(marking.source) && marking.start === null && marking.end === null;
 }
 
 /** Shared topic associations survive personal highlighting and remain independently deletable in their group. */

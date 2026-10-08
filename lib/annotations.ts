@@ -135,10 +135,14 @@ function isAdded(span: ScriptureSpan): boolean {
   return span.tag === "transChange" && span.attrs?.type === "added";
 }
 
+function isJesusSpeaker(span: ScriptureSpan): boolean {
+  return /^#?jesus$/iu.test(span.attrs?.who?.trim() ?? "");
+}
+
 export function annotationClasses(spans: ScriptureSpan[]): string[] {
   const classes: string[] = [];
   if (spans.some(isAdded)) classes.push("scripture-supplied");
-  if (spans.some((span) => span.tag === "q" && /^#?jesus$/iu.test(span.attrs?.who?.trim() ?? ""))) classes.push("scripture-jesus");
+  if (spans.some((span) => span.tag === "q" && isJesusSpeaker(span))) classes.push("scripture-jesus");
   if (spans.some((span) => span.tag === "divineName")) classes.push("scripture-divine-name");
   if (spans.some((span) => span.tag === "hi" && /^(italic|italics)$/iu.test(span.attrs?.type ?? ""))) classes.push("scripture-italic");
   if (spans.some((span) => span.tag === "hi" && /^(bold|boldface)$/iu.test(span.attrs?.type ?? ""))) classes.push("scripture-bold");
@@ -149,7 +153,7 @@ export function spanDetails(spans: ScriptureSpan[]): string[] {
   return [...new Set(spans.flatMap((span) => {
     if (isAdded(span)) return ["Word supplied by the translation"];
     if (span.tag === "divineName") return ["Divine name"];
-    if (span.attrs?.who) return [`Speaker: ${span.attrs.who}`];
+    if (span.attrs?.who) return isJesusSpeaker(span) ? [] : [`Speaker: ${span.attrs.who}`];
     return [span.tag, ...Object.entries(span.attrs ?? {}).map(([name, value]) => `${name}: ${value}`)];
   }))];
 }
@@ -169,7 +173,10 @@ export function verseSourceAnnotations(verse: AnnotatedVerse): SourceAnnotation[
     const tag = span.tag.toLowerCase();
     const references = spanReferences(span);
     const isNote = ["note", "footnote", "reference", "ref", "crossref", "crossreference"].includes(tag);
-    const isSpeaker = Boolean(span.attrs?.who);
+    // Red text already identifies Jesus. Keep real notes and references, but
+    // avoid repeating the speaker as a separate annotation or word tooltip.
+    const isSpeaker = Boolean(span.attrs?.who) && !isJesusSpeaker(span);
+    if (isJesusSpeaker(span) && !isNote && !references.length) continue;
     if (!isNote && !isSpeaker && !references.length && locatedRange(span, count)) continue;
     const label = isSpeaker ? `Speaker: ${span.attrs?.who}` : references.length ? "Reference" : isNote ? "Source note" : "Source annotation";
     annotations.push({

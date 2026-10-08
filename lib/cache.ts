@@ -13,6 +13,7 @@ type Metadata = {
   loaded:Record<string,string>;
   full:Record<string,string>;
   fullChecked:Record<string,number>;
+  downloaded:Record<string,Translation>;
 };
 export type Result<T> = { data:T; cached:boolean; verified:boolean; persisted?:boolean };
 type Saved<T> = { data:T; persisted:boolean };
@@ -24,7 +25,7 @@ function remember<T>(url:string,saved:Saved<T>):void {
   while (corpora.length>2) memory.delete(corpora.shift()!);
   while (memory.size>64) memory.delete(memory.keys().next().value!);
 }
-const blank = ():Metadata => ({version:3,translations:{checkedAt:0,hashes:{}},books:{},chapters:{},loaded:{},full:{},fullChecked:{}});
+const blank = ():Metadata => ({version:3,translations:{checkedAt:0,hashes:{}},books:{},chapters:{},loaded:{},full:{},fullChecked:{},downloaded:{}});
 let memoryMetadata = blank();
 
 function metadata():Metadata {
@@ -68,6 +69,7 @@ function translationId(value:string):string {
   if (!/^[a-z0-9][a-z0-9_-]{0,29}$/.test(normalized)) throw new Error("Invalid translation identifier");
   return normalized;
 }
+const offline = ():boolean => globalThis.navigator?.onLine === false;
 function position(value:number):number {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error("Invalid Scripture position");
   return value;
@@ -125,6 +127,33 @@ async function savedTranslation(abbr:string):Promise<Saved<WholeTranslation>|nul
   const saved=await read<WholeTranslation>(`${API_ROOT}/${abbr}.json`);
   return saved && Array.isArray(saved.data.books) ? saved : null;
 }
+function translationFromDownload(data:WholeTranslation,sha:string):Translation {
+  // The startup catalogue needs distribution information, not the entire corpus.
+  const summary=Object.fromEntries(Object.entries(data).filter(([key])=>!["books","titles","introduction"].includes(key)));
+  return {...summary,sha} as Translation;
+}
+async function downloadedTranslations():Promise<Result<Record<string,Translation>>|null> {
+  const meta=metadata(),data:Record<string,Translation>={};
+  const candidates=new Set([...Object.keys(meta.downloaded),...Object.keys(meta.full)]);
+  const addUrl=(url:string)=>{
+    const match=url.startsWith(`${API_ROOT}/`) && url.slice(API_ROOT.length+1).match(/^([a-z0-9][a-z0-9_-]{0,29})\.json$/);
+    if (match && match[1]!=="translations") candidates.add(match[1]);
+  };
+  for (const url of memory.keys()) addUrl(url);
+  try {
+    // Recover downloads made by earlier releases, including after catalogue or
+    // localStorage eviction. CacheStorage owns the actual offline availability.
+    for (const request of await (await caches.open(CACHE)).keys()) addUrl(request.url);
+  } catch { /* Session downloads remain usable without persistent storage. */ }
+  let persisted=true;
+  for (const abbr of candidates) {
+    const saved=await savedTranslation(abbr);
+    if (!saved || saved.data.abbreviation!==abbr) continue;
+    data[abbr]=meta.downloaded[abbr] ?? translationFromDownload(saved.data,meta.full[abbr] || "");
+    persisted &&= saved.persisted;
+  }
+  return Object.keys(data).length ? {data,cached:true,verified:false,persisted} : null;
+}
 function chapterFromTranslation(data:WholeTranslation,book:number,nr:number):Chapter|null {
   const sourceBook=data.books.find(item=>item.nr===book);
   const sourceChapter=sourceBook?.chapters.find(item=>item.chapter===nr);
@@ -158,6 +187,11 @@ function chaptersFromTranslation(data:WholeTranslation,book:number):Record<strin
 export async function translations():Promise<Result<Record<string,Translation>>> {
   const url=`${API_ROOT}/translations.json`,meta=metadata(),saved=await read<Record<string,Translation>>(url);
   if (saved && fresh(meta.translations.checkedAt)) return cached(saved,true);
+  if (offline()) {
+    if (saved) return cached(saved);
+    const downloaded=await downloadedTranslations();
+    if (downloaded) return downloaded;
+  }
   try {
     const {data,bytes}=await network<Record<string,Translation>>(url);
     const next=metadata(),updated=hashes(data);
@@ -173,7 +207,12 @@ export async function translations():Promise<Result<Record<string,Translation>>>
     save(next);
     const persisted=await write(url,data,bytes);
     return {data,cached:false,verified:true,persisted};
-  } catch(error) { if (saved) return cached(saved); throw error; }
+  } catch(error) {
+    if (saved) return cached(saved);
+    const downloaded=await downloadedTranslations();
+    if (downloaded) return downloaded;
+    throw error;
+  }
 }
 
 export async function books(translation:string):Promise<Result<Record<string,Book>>> {
@@ -182,6 +221,10 @@ export async function books(translation:string):Promise<Result<Record<string,Boo
   if (full && fullTrusted(meta,abbr)) return {data:booksFromTranslation(full.data),cached:true,verified:true,persisted:full.persisted};
   const saved=await read<Record<string,Book>>(url);
   if (saved && fresh(meta.books[abbr]?.checkedAt || 0)) return cached(saved,true);
+  if (offline()) {
+    if (full) return {data:booksFromTranslation(full.data),cached:true,verified:false,persisted:full.persisted};
+    if (saved) return cached(saved);
+  }
   try {
     const {data,bytes}=await network<Record<string,Book>>(url),next=metadata(),updated=hashes(data);
     for (const [book,previous] of Object.entries(next.books[abbr]?.hashes || {})) {
@@ -208,6 +251,10 @@ export async function chapters(translation:string,book:number):Promise<Result<Re
   if (fromFull && fullTrusted(meta,abbr)) return {data:fromFull,cached:true,verified:true,persisted:full?.persisted};
   const saved=await read<Record<string,ChapterInfo>>(url);
   if (saved && fresh(meta.chapters[key]?.checkedAt || 0)) return cached(saved,true);
+  if (offline()) {
+    if (fromFull) return {data:fromFull,cached:true,verified:false,persisted:full?.persisted};
+    if (saved) return cached(saved);
+  }
   try {
     const {data,bytes}=await network<Record<string,ChapterInfo>>(url),next=metadata(),updated=hashes(data);
     for (const [nr,previous] of Object.entries(next.chapters[key]?.hashes || {})) {
@@ -229,6 +276,10 @@ export async function chapter(translation:string,book:number,nr:number):Promise<
   const full=await savedTranslation(abbr),fromFull=full && chapterFromTranslation(full.data,book,nr);
   if (fromFull && fullTrusted(metadata(),abbr)) return {data:fromFull,cached:true,verified:true,persisted:full?.persisted};
   const saved=await read<Chapter>(url);
+  if (offline()) {
+    if (fromFull) return {data:fromFull,cached:true,verified:false,persisted:full?.persisted};
+    if (saved) return cached(saved);
+  }
   try {
     if (fromFull) {
       const wholeHash=await sourceHash(`${API_ROOT}/${abbr}.sha`);
@@ -255,6 +306,7 @@ export async function chapter(translation:string,book:number,nr:number):Promise<
 export async function fullTranslation(translation:string,expectedSha:string):Promise<Result<WholeTranslation>> {
   const abbr=translationId(translation),url=`${API_ROOT}/${abbr}.json`,saved=await savedTranslation(abbr);
   if (saved && validSha(expectedSha) && metadata().full[abbr] === expectedSha.toLowerCase() && fullTrusted(metadata(),abbr)) return cached(saved,true);
+  if (saved && offline()) return cached(saved);
   try {
     // Catalogue entries may be stale; the resource's own hash is authoritative.
     const sha=await sourceHash(`${API_ROOT}/${abbr}.sha`);
@@ -265,6 +317,7 @@ export async function fullTranslation(translation:string,expectedSha:string):Pro
     const {data,bytes,verified}=await verifiedDocument<WholeTranslation>(url,sha,180_000);
     if (data.abbreviation !== abbr || !Array.isArray(data.books)) throw new Error("GetBible returned an invalid translation document");
     const persisted=await write(url,data,bytes),next=metadata();
+    next.downloaded[abbr]=translationFromDownload(data,sha);
     if (verified) { next.full[abbr]=sha;next.fullChecked[abbr]=Date.now(); }
     if (next.books[abbr]) next.books[abbr].checkedAt=0;
     for (const [key,value] of Object.entries(next.chapters)) if (key.startsWith(`${abbr}/`)) value.checkedAt=0;

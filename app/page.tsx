@@ -38,10 +38,8 @@ import {
   translations as loadTranslations,
 } from "../lib/cache";
 import {
-  DEFAULT_MARKING_COLORS,
   type Marking,
   type MarkingColor,
-  compareMarkings,
   mergeColors,
   mergeMarkings,
   parseMarkingsBackup,
@@ -52,7 +50,10 @@ import {
   personalWholeVerseMarking,
   withoutTextSelectionMarkings,
   withoutWholeVerseMarking,
+  isSharedBookmarkMarking,
 } from "../lib/markings";
+import { readBookmarkState, writeBookmarkState } from "../lib/bookmark-storage";
+import { prepareOfflineReader } from "../lib/offline-ready";
 import { DEFAULT_TRANSLATION, loadDailyReference, resolveDailyPassage } from "../lib/daily";
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, normalizeReadingWidth, type ReadingWidth, readerStorageKeys } from "../lib/reader-state";
@@ -62,12 +63,13 @@ import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from "../lib/i18n";
 import { floatingToolbarPosition, type FloatingRect, type FloatingToolbarPosition } from "../lib/floating-toolbar";
 
-import { clearStudyCache, getDictionaryCatalog } from "../lib/study-api";
+import { clearStudyCache, getDictionaryCatalog, getBookmarkAll, getBookmarkTopic, downloadBookmarkCatalog, type BookmarkAll } from "../lib/study-api";
+import { bookmarkDefaultColors, bookmarkMigrationPreview, migrateBookmarkGroups, importBookmarkCatalog, importBookmarkTopicIntoGroups, removeGlobalBookmarkMarkings, type BookmarkGroupMigration, bookmarkDisplayRows } from "../lib/shared-bookmarks";
 import { prewarmDictionaryLookup } from "../lib/dictionary-lookup";
 import { clearQueryCache, queryScripture, searchScripture } from "../lib/scripture-api";
 import StudyPanel from "./components/StudyPanel";
 import { OfflineShell } from "./components/OfflineShell";
-import { SharedBookmarks } from "./components/SharedBookmarks";
+import { InfrastructureCredit } from "./components/InfrastructureCredit";
 import { ReferenceModal } from "./components/ReferenceModal";
 import { ScriptureText, VerseAnnotations } from "./components/ScriptureText";
 import { getVerseHeadings, isParagraphStart } from "../lib/annotations";
@@ -80,6 +82,7 @@ const TEXT_SIZE = "getbible-reader:size:v1";
 const MARKINGS = "getbible-reader:markings:v1";
 const MARKING_COLORS = "getbible-reader:marking-colors:v1";
 const ACTIVE_COLOR = "getbible-reader:active-color:v1";
+
 const READER_FONT = "getbible-reader:font:v1";
 const LIGHT_PALETTE = "getbible-reader:light-palette:v1";
 const DARK_PALETTE = "getbible-reader:dark-palette:v1";
@@ -189,8 +192,15 @@ export default function Home() {
   const [drawer, setDrawer] = useState<Drawer>(null);
   const [markingsReady, setMarkingsReady] = useState(false);
   const [markings, setMarkings] = useState<Marking[]>([]);
-  const [colors, setColors] = useState<MarkingColor[]>(DEFAULT_MARKING_COLORS);
-  const [activeColorId, setActiveColorId] = useState(DEFAULT_MARKING_COLORS[0].id);
+  const [colors, setColors] = useState<MarkingColor[]>([]);
+  const [activeColorId, setActiveColorId] = useState("");
+  const [bookmarkCatalog, setBookmarkCatalog] = useState<BookmarkAll | null>(null);
+  const [bookmarkSetup, setBookmarkSetup] = useState<"fresh" | "legacy" | "current">("fresh");
+  const [migrationDismissed, setMigrationDismissed] = useState(false);
+  const [bookmarkLoading, setBookmarkLoading] = useState(false);
+  const [bookmarkBusy, setBookmarkBusy] = useState<string | null>(null);
+  const [bookmarkError, setBookmarkError] = useState("");
+  const [bookmarkRevision, setBookmarkRevision] = useState(0);
   const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
   const [wholeVerseSelection, setWholeVerseSelection] = useState<WholeVerseSelection | null>(null);
   const [selectedColorId, setSelectedColorId] = useState<string | null>(null);
@@ -207,6 +217,7 @@ export default function Home() {
   const [noteEditor, setNoteEditor] = useState<NoteEditor | null>(null);
   const [needsDaily, setNeedsDaily] = useState(false);
   const [pendingVerse, setPendingVerse] = useState<number | null>(null);
+  const [dailyHighlight, setDailyHighlight] = useState<(Passage & { verses: number[] }) | null>(null);
   const [markdownMode, setMarkdownMode] = useState(false);
   const [markdownMessage, setMarkdownMessage] = useState("");
   const [searchOpen, setSearchOpen] = useState(false);
@@ -223,7 +234,6 @@ export default function Home() {
   const [searchProximity, setSearchProximity] = useState<number | undefined>();
   const [searchRevision, setSearchRevision] = useState(0);
   const [studyTarget, setStudyTarget] = useState<{verse?:number;word?:string;strong?:string[]}|null>(null);
-  const [sharedBookmarksOpen, setSharedBookmarksOpen] = useState(false);
   const [referenceTarget, setReferenceTarget] = useState<string | null>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(true);
   const [offlineAvailable, setOfflineAvailable] = useState(false);
@@ -255,6 +265,12 @@ export default function Home() {
   const locale = uiLocale(translation?.lang);
   const t = useMemo(() => createUiTranslator(locale, uiMessages.locale === locale ? uiMessages.messages : []), [locale, uiMessages]);
   const translatorRef = useRef(t);
+  const bookmarkState = useRef({ colors, markings, activeColorId, selectedColorId });
+  const bookmarkDownloadGeneration = useRef(0);
+  const migrationDialog = useRef<HTMLElement | null>(null);
+  const migrationOpen = bookmarkSetup === "legacy" && Boolean(bookmarkCatalog) && !migrationDismissed;
+
+  useEffect(() => { bookmarkState.current = { colors, markings, activeColorId, selectedColorId }; }, [colors, markings, activeColorId, selectedColorId]);
 
   const countMessage = (count: number, one: UiMessageKey, many: UiMessageKey) =>
     t(count === 1 ? one : many, { count });
@@ -337,12 +353,11 @@ export default function Home() {
         }
       }
 
-      const storedColors = storedValue<MarkingColor[]>(
-        MARKING_COLORS,
-        DEFAULT_MARKING_COLORS,
-      );
-      const usableColors = storedColors.length ? storedColors : DEFAULT_MARKING_COLORS;
-      const savedActive = localStorage.getItem(ACTIVE_COLOR);
+      const savedBookmarks = readBookmarkState(localStorage);
+      const usableColors = savedBookmarks?.colors ?? storedValue<MarkingColor[]>(MARKING_COLORS, []);
+      const hasPreviousBookmarks = localStorage.getItem(MARKING_COLORS) !== null || localStorage.getItem(MARKINGS) !== null;
+      setBookmarkSetup(savedBookmarks?.setup ?? (hasPreviousBookmarks ? "legacy" : "fresh"));
+      const savedActive = savedBookmarks?.activeColorId ?? localStorage.getItem(ACTIVE_COLOR);
 
       setRoute(next);
       setAnnotationsEnabled(storedValue<boolean>(SOURCE_ANNOTATIONS, true));
@@ -351,7 +366,7 @@ export default function Home() {
       setTextSize(
         Math.min(28, Math.max(16, Number(localStorage.getItem(TEXT_SIZE)) || 20)),
       );
-      setMarkings(storedValue<Marking[]>(MARKINGS, []));
+      setMarkings(savedBookmarks?.markings ?? storedValue<Marking[]>(MARKINGS, []));
       setNotes(mergeNotes([], storedValue<VerseNote[]>(NOTES, [])));
       const savedFont = localStorage.getItem(READER_FONT) ?? "serif";
       const savedPalette = localStorage.getItem(LIGHT_PALETTE) ?? "white";
@@ -367,7 +382,7 @@ export default function Home() {
       setActiveColorId(
         usableColors.some((color) => color.id === savedActive)
           ? (savedActive as string)
-          : usableColors[0].id,
+          : usableColors[0]?.id ?? "",
       );
       setMarkingsReady(true);
       setReady(true);
@@ -379,6 +394,7 @@ export default function Home() {
       setPathBookSlug(friendly?.bookSlug ?? null);
       setRoute(friendly ? { translation: friendly.translation, book: INITIAL_PASSAGE.book, chapter: friendly.chapter } : parsePassage(window.location.search));
       setMarkdownMode(false);
+      setDailyHighlight(null);
     };
     window.addEventListener("popstate", popState);
     return () => {
@@ -412,11 +428,11 @@ export default function Home() {
   }, [locale, translation?.direction]);
 
   useEffect(() => {
-    if (!searchOpen && !infoModal && !studyTarget && !sharedBookmarksOpen && !referenceTarget) return;
+    if (!searchOpen && !infoModal && !studyTarget && !referenceTarget && !migrationOpen) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previous; };
-  }, [infoModal, searchOpen, studyTarget, sharedBookmarksOpen, referenceTarget]);
+  }, [infoModal, searchOpen, studyTarget, referenceTarget, migrationOpen]);
 
   useEffect(() => {
     if (!ready) return;
@@ -425,19 +441,122 @@ export default function Home() {
 
   useEffect(() => {
     if (!markingsReady) return;
-    localStorage.setItem(MARKINGS, JSON.stringify(markings));
-  }, [markings, markingsReady]);
-
-  useEffect(() => {
-    if (!markingsReady) return;
-    localStorage.setItem(NOTES, JSON.stringify(notes));
+    try { localStorage.setItem(NOTES, JSON.stringify(notes)); } catch { /* Notes remain in this session and can be exported. */ }
   }, [markingsReady, notes]);
 
   useEffect(() => {
     if (!markingsReady) return;
-    localStorage.setItem(MARKING_COLORS, JSON.stringify(colors));
-    localStorage.setItem(ACTIVE_COLOR, activeColorId);
-  }, [activeColorId, colors, markingsReady]);
+    try { writeBookmarkState(localStorage, { version: 2, colors, markings, activeColorId, setup: bookmarkSetup }); }
+    catch { window.setTimeout(() => setBookmarkError("Browser storage could not save your bookmarks. Export a backup to keep changes from this session."), 0); }
+  }, [activeColorId, colors, markings, markingsReady, bookmarkSetup]);
+
+  const applyBookmarkGroups = useCallback((result: BookmarkGroupMigration) => {
+    const current = bookmarkState.current;
+    const active = result.colorIdMap[current.activeColorId] ?? (result.colors.some((color) => color.id === current.activeColorId) ? current.activeColorId : result.colors[0]?.id ?? "");
+    const selected = current.selectedColorId ? result.colorIdMap[current.selectedColorId] ?? current.selectedColorId : null;
+    bookmarkState.current = { colors: result.colors, markings: result.markings, activeColorId: active, selectedColorId: selected };
+    setColors(result.colors);
+    setMarkings(result.markings);
+    setActiveColorId(active);
+    setSelectedColorId(selected);
+    setBookmarkSetup("current");
+    setMigrationDismissed(false);
+    try {
+      writeBookmarkState(localStorage, { version: 2, colors: result.colors, markings: result.markings, activeColorId: active, setup: "current" });
+    } catch {
+      setBookmarkError("Bookmarks are available for this session, but browser storage could not save them. Export a backup to keep your changes.");
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!markingsReady) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      setBookmarkLoading(true);
+      setBookmarkError("");
+      void getBookmarkAll(controller.signal).then((catalog) => {
+        bookmarkDefaultColors(catalog, translation?.lang || "en");
+        if (!controller.signal.aborted) setBookmarkCatalog(catalog);
+      }).catch((caught) => {
+        if (!controller.signal.aborted) {
+          console.error(caught);
+          setBookmarkError("Global topics could not be loaded. Your saved bookmarks are still available. Try again when connected.");
+        }
+      }).finally(() => { if (!controller.signal.aborted) setBookmarkLoading(false); });
+    }, 0);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [markingsReady, bookmarkRevision, translation?.lang]);
+
+  useEffect(() => {
+    if (bookmarkSetup !== "fresh" || !bookmarkCatalog) return;
+    const timer = window.setTimeout(() => {
+      const current = bookmarkState.current;
+      applyBookmarkGroups(migrateBookmarkGroups(current.colors, current.markings, bookmarkCatalog, translation?.lang || "en"));
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, [applyBookmarkGroups, bookmarkCatalog, bookmarkSetup, translation?.lang]);
+
+  const migrationPreview = useMemo(() => bookmarkSetup === "legacy" && bookmarkCatalog
+    ? bookmarkMigrationPreview(colors, bookmarkCatalog, translation?.lang || "en") : null,
+  [bookmarkSetup, bookmarkCatalog, colors, translation?.lang]);
+  useEffect(() => {
+    if (!migrationOpen) return;
+    const dialog = migrationDialog.current;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const buttons = Array.from(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? []);
+    buttons[0]?.focus();
+    const retainFocus = (event: FocusEvent) => {
+      if (dialog && event.target instanceof Node && !dialog.contains(event.target)) buttons[0]?.focus();
+    };
+    const trap = (event: KeyboardEvent) => {
+      if (event.key === "Escape") { event.preventDefault(); setMigrationDismissed(true); }
+      if (event.key !== "Tab" || !buttons.length) return;
+      const first = buttons[0];
+      const last = buttons[buttons.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    };
+    document.addEventListener("focusin", retainFocus);
+    document.addEventListener("keydown", trap);
+    return () => { document.removeEventListener("focusin", retainFocus); document.removeEventListener("keydown", trap); previousFocus?.focus(); };
+  }, [migrationOpen]);
+
+  const migrateBookmarks = () => {
+    if (!bookmarkCatalog) return;
+    const current = bookmarkState.current;
+    applyBookmarkGroups(migrateBookmarkGroups(current.colors, current.markings, bookmarkCatalog, translation?.lang || "en"));
+    setMarkingMessage("Bookmarks migrated. Matching topics are merged and your personal bookmarks are retained.");
+  };
+
+  const downloadGlobalBookmarks = async (topicId?: string) => {
+    const generation = ++bookmarkDownloadGeneration.current;
+    setBookmarkBusy(topicId ?? "all");
+    setBookmarkError("");
+    try {
+      const catalog = topicId ? bookmarkCatalog ?? await getBookmarkAll() : bookmarkCatalog;
+      const downloaded = topicId ? await getBookmarkTopic(topicId) : await downloadBookmarkCatalog();
+      if (generation !== bookmarkDownloadGeneration.current) return;
+      const current = bookmarkState.current;
+      const unified = catalog ? migrateBookmarkGroups(current.colors, current.markings, catalog, translation?.lang || "en") : current;
+      const result = "id" in downloaded
+        ? importBookmarkTopicIntoGroups(unified.colors, unified.markings, downloaded, route.translation, translation?.lang || "en")
+        : importBookmarkCatalog(current.colors, current.markings, downloaded, route.translation, translation?.lang || "en");
+      if ("colorIdMap" in unified) result.colorIdMap = { ...unified.colorIdMap, ...result.colorIdMap };
+      if (!("id" in downloaded)) setBookmarkCatalog(downloaded);
+      else if (catalog) setBookmarkCatalog(catalog);
+      applyBookmarkGroups(result);
+      setMarkingMessage(topicId ? "Global bookmarks added to this topic." : "All global topics and bookmarks are available in your browser.");
+    } catch (caught) {
+      if (generation !== bookmarkDownloadGeneration.current) return;
+      console.error(caught);
+      setBookmarkError("Global bookmarks could not be downloaded. Your saved bookmarks have been kept. Try again when connected.");
+    } finally { if (generation === bookmarkDownloadGeneration.current) setBookmarkBusy(null); }
+  };
+
+  const removeGlobalBookmarks = (topicId?: string) => {
+    setMarkings((current) => removeGlobalBookmarkMarkings(current, topicId));
+    setMarkingMessage("Downloaded global bookmarks removed. Your personal bookmarks and topics are retained.");
+  };
 
   const go = useCallback((next: Passage, replace = false, requestedBookName?: string | null) => {
     const selectedBookName = requestedBookName === null ? null : requestedBookName ?? booksRef.current.find((book) => book.nr === next.book)?.name;
@@ -451,6 +570,7 @@ export default function Home() {
     try { localStorage.setItem(LAST_PASSAGE, JSON.stringify(next)); } catch { /* Navigation remains usable without persistence. */ }
     setMarkdownMode(false);
     setMarkdownMessage("");
+    setDailyHighlight((current) => current && current.translation === next.translation && current.book === next.book && current.chapter === next.chapter ? current : null);
     setRoute((current) => current.translation === next.translation && current.book === next.book && current.chapter === next.chapter ? current : next);
   }, []);
 
@@ -462,6 +582,7 @@ export default function Home() {
       setError("");
       setPendingVerse(target.verse);
       go({ translation: target.translation, book: target.book, chapter: target.chapter }, false, target.bookName);
+      setDailyHighlight({ translation: target.translation, book: target.book, chapter: target.chapter, verses: target.verses });
       setDrawer(null);
     } catch (caught) {
       console.error(caught);
@@ -641,30 +762,30 @@ export default function Home() {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (migrationOpen) return;
       if (event.key === "Escape") {
         setDrawer(null);
         setSearchOpen(false);
         setInfoModal(null);
         setStudyTarget(null);
-        setSharedBookmarksOpen(false);
         setReferenceTarget(null);
         setNoteEditor(null);
         closeSelectionToolbar();
       }
-      if (studyTarget || sharedBookmarksOpen || referenceTarget || searchOpen || infoModal) return;
+      if (studyTarget || referenceTarget || searchOpen || infoModal) return;
       if (event.altKey && event.key === "ArrowLeft") void turn(-1);
       if (event.altKey && event.key === "ArrowRight") void turn(1);
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [closeSelectionToolbar, turn, studyTarget, sharedBookmarksOpen, referenceTarget, searchOpen, infoModal]);
+  }, [closeSelectionToolbar, turn, studyTarget, referenceTarget, searchOpen, infoModal, migrationOpen]);
 
   useEffect(() => {
     boundaryLock.current = false;
     boundaryAttempt.current = null;
     wheelGestureActive.current = false;
     window.clearTimeout(wheelGestureTimer.current);
-    if (drawer || searchOpen || infoModal || studyTarget || sharedBookmarksOpen || referenceTarget || markdownMode || loading || !passage) return;
+    if (drawer || searchOpen || infoModal || studyTarget || referenceTarget || migrationOpen || markdownMode || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
@@ -691,7 +812,7 @@ export default function Home() {
       window.clearTimeout(wheelGestureTimer.current);
       window.removeEventListener("wheel", wheel);
     };
-  }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, studyTarget, sharedBookmarksOpen, referenceTarget, turn]);
+  }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, studyTarget, referenceTarget, turn, migrationOpen]);
 
   const searchOptions = useMemo(() => ({
     words: searchWords, match: searchMatch, caseSensitive: searchCaseSensitive,
@@ -762,11 +883,11 @@ export default function Home() {
     const download = ++offlineRequestId.current;
     setOfflineLoading(true); setOfflineMessage("");
     try {
-      const downloaded = await loadFullTranslation(abbreviation, translation.sha);
+      const [downloaded, interfaceSaved] = await Promise.all([loadFullTranslation(abbreviation, translation.sha), prepareOfflineReader()]);
       const saved = await fullTranslationAvailable(abbreviation);
       if (download !== offlineRequestId.current) return;
       setOfflineAvailable(saved);
-      setOfflineMessage(saved ? (downloaded.verified ? "Translation saved for offline reading, including available study metadata." : "Previously saved translation is still available. The update could not be verified.") : "Downloaded, but this browser could not save it. Check available storage.");
+      setOfflineMessage(saved ? (interfaceSaved ? (downloaded.verified ? "Translation and reader saved for offline use, including available study metadata." : "Previously saved translation and reader are available offline. The translation update could not be verified.") : "Translation data is saved, but the reader interface could not be saved for offline use. Keep this page open and try the download again while connected.") : "Downloaded, but this browser could not save it. Check available storage.");
     } catch (caught) { if (download === offlineRequestId.current) setOfflineMessage(caught instanceof Error ? caught.message : "Unable to download this translation."); }
     finally { if (download === offlineRequestId.current) setOfflineLoading(false); }
   };
@@ -781,7 +902,7 @@ export default function Home() {
     setStudyTarget(null); closeSelectionToolbar(); restartSearch(text);
   };
   const openStudyPassage = (book: number, chapter: number, verse: number) => {
-    setReferenceTarget(null); setSharedBookmarksOpen(false); setStudyTarget(null); setPendingVerse(verse);
+    setReferenceTarget(null); setStudyTarget(null); setPendingVerse(verse);
     go({ translation: route.translation, book, chapter });
   };
 
@@ -928,7 +1049,6 @@ export default function Home() {
   };
 
   const removeColor = (id: string) => {
-    if (colors.length === 1) return;
     const color = colors.find((item) => item.id === id);
     const linked = markings.filter((marking) => marking.colorId === id).length;
     if (linked && !window.confirm(t(linked === 1 ? "deleteColorConfirmOne" : "deleteColorConfirm", { name: color?.name ?? t("colorName"), count: linked }))) return;
@@ -944,7 +1064,7 @@ export default function Home() {
   };
 
   const sortedColorMarkings = useMemo(
-    () => markings.filter((marking) => marking.colorId === selectedColorId).sort(compareMarkings),
+    () => bookmarkDisplayRows(markings.filter((marking) => marking.colorId === selectedColorId)),
     [markings, selectedColorId],
   );
   const visibleColors = useMemo(() => {
@@ -966,14 +1086,15 @@ export default function Home() {
   const importMarkings = async (file: File) => {
     try {
       const backup = parseMarkingsBackup(JSON.parse(await file.text()));
-      const previousCount = markings.length;
-      const nextColors = mergeColors(colors, backup.colors);
-      const nextMarkings = mergeMarkings(markings, backup.markings).filter((marking) => nextColors.some((color) => color.id === marking.colorId));
-      setColors(nextColors);
-      setMarkings(nextMarkings);
+      const current = bookmarkState.current;
+      const previousCount = current.markings.length;
+      const nextColors = mergeColors(current.colors, backup.colors);
+      const nextMarkings = mergeMarkings(current.markings, backup.markings).filter((marking) => nextColors.some((color) => color.id === marking.colorId));
+      if (bookmarkCatalog) applyBookmarkGroups(migrateBookmarkGroups(nextColors, nextMarkings, bookmarkCatalog, translation?.lang || "en"));
+      else { setColors(nextColors); setMarkings(nextMarkings); setBookmarkSetup("legacy"); setMigrationDismissed(false); }
       const previousNotes = notes.length;
       const nextNotes = mergeNotes(notes, backup.notes ?? []);
-      setNotes(nextNotes);
+      setNotes((current) => mergeNotes(current, backup.notes ?? []));
       setMarkingMessage(t("importComplete", { markings: nextMarkings.length - previousCount, notes: nextNotes.length - previousNotes }));
     } catch (caught) {
       console.error(caught);
@@ -1021,6 +1142,8 @@ export default function Home() {
 
   const clearAllLocalData = async () => {
     if (!window.confirm(t("clearAllConfirm"))) return;
+    ++bookmarkDownloadGeneration.current;
+    setBookmarkBusy(null);
     await clearCache();
     await clearQueryCache();
     await clearStudyCache();
@@ -1031,8 +1154,14 @@ export default function Home() {
     readerStorageKeys(Object.keys(localStorage)).forEach((key) => localStorage.removeItem(key));
     setMarkings([]);
     setNotes([]);
-    setColors(DEFAULT_MARKING_COLORS);
-    setActiveColorId(DEFAULT_MARKING_COLORS[0].id);
+    const defaults = bookmarkCatalog ? bookmarkDefaultColors(bookmarkCatalog, translation?.lang || "en") : [];
+    setColors(defaults);
+    setActiveColorId(defaults[0]?.id ?? "");
+    setSelectedColorId(null);
+    setBookmarkSetup(bookmarkCatalog ? "current" : "fresh");
+    setMigrationDismissed(false);
+
+    setDailyHighlight(null);
     setOfflineAvailable(false);
     setOfflineMessage("");
     setSearchQuery("");
@@ -1154,11 +1283,15 @@ export default function Home() {
         </button> : null}
       </header>
 
+      {migrationOpen && migrationPreview ? <div className="bookmark-migration-backdrop">
+        <section ref={migrationDialog} className="bookmark-migration" role="dialog" aria-modal="true" aria-labelledby="bookmark-migration-title">
+          <h2 id="bookmark-migration-title">Your bookmarks now share global topics</h2>
+          <p>The topic list now comes from the getBible API. Migrate your saved bookmarks to combine matching topics and keep your custom topics, colors, and personal bookmarks.</p>
+          <p>{migrationPreview.matchingGroups} existing topics match global topics. {migrationPreview.retainedGroups} custom topics will be kept. {migrationPreview.addedGroups} global topics will be added.</p>
+          <div className="bookmark-actions"><button type="button" onClick={migrateBookmarks}>Migrate bookmarks</button><button type="button" onClick={() => setMigrationDismissed(true)}>Later</button></div>
+        </section>
+      </div> : null}
       {studyTarget ? <StudyPanel translation={route.translation} language={translation?.lang || "en"} book={route.book} chapter={route.chapter} {...studyTarget} onClose={() => setStudyTarget(null)} onReference={openReference} onSearch={openStudySearch} /> : null}
-      {sharedBookmarksOpen ? <SharedBookmarks translation={route.translation} language={translation?.lang || "en"} onClose={() => setSharedBookmarksOpen(false)} onReference={openReference} onOpen={openStudyPassage} onImport={(importedColors, importedMarkings) => {
-        setColors((current) => mergeColors(current, importedColors));
-        setMarkings((current) => mergeMarkings(current, importedMarkings));
-      }} /> : null}
       {referenceTarget ? <ReferenceModal translation={route.translation} reference={referenceTarget} onClose={() => setReferenceTarget(null)} onOpen={openStudyPassage} /> : null}
 
       {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label={t("searchBible")}>
@@ -1235,6 +1368,7 @@ export default function Home() {
               {translationHistory.length ? <section><h3>{t("translationHistory")}</h3><ol className="translation-history">
                 {translationHistory.map(([version, description]) => <li key={version}><strong>{version.replace(/^history_/, "")}</strong><span>{description}</span></li>)}
               </ol></section> : null}
+              <InfrastructureCredit message={t("builtUponInfrastructure")} />
             </> : <div className="sync-information">
               <p>{rich("syncParagraph1", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
               <p>{rich("syncParagraph2", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
@@ -1413,7 +1547,7 @@ export default function Home() {
                 <strong>Offline reading</strong>
                 <p>Save the entire translation in one download. Available dictionaries and commentaries can be saved from Study.</p>
                 <button type="button" disabled={offlineLoading || !translation} onClick={() => void downloadTranslation()}>{offlineLoading ? "Downloading translation…" : offlineAvailable ? "Check offline translation" : "Download translation"}</button>
-                <p role="status">{offlineMessage || (offlineAvailable ? "This translation is available offline." : "Read downloaded chapters without a connection.")}</p>
+                <p role="status">{offlineMessage || (offlineAvailable ? "Translation data is saved in this browser." : "Read downloaded chapters without a connection.")}</p>
               </div>
               <button
                 className="plain-action"
@@ -1428,7 +1562,6 @@ export default function Home() {
 
         {drawer === "markings" ? (
           <div className="drawer-content markings-panel">
-            <button className="shared-bookmarks-button" type="button" onClick={() => { setDrawer(null); setSharedBookmarksOpen(true); }}>Browse shared bookmarks</button>
             <p className="drawer-help">
               {t("studyHelp")}
             </p>
@@ -1442,6 +1575,16 @@ export default function Home() {
               event.target.value = "";
             }} />
             {studyTab === "markings" ? <>
+            <section className="global-bookmark-controls" aria-label="Global bookmarks">
+              <p>API topics and your own topics share this bookmark list. <span className="global-bookmark-badge" title="Global bookmark">G</span> marks downloaded global bookmarks.</p>
+              <div className="bookmark-actions">
+                <button type="button" disabled={Boolean(bookmarkBusy)} onClick={() => void downloadGlobalBookmarks()}>{bookmarkBusy === "all" ? "Downloading…" : "Download all global bookmarks"}</button>
+                <button type="button" disabled={Boolean(bookmarkBusy) || !markings.some(isSharedBookmarkMarking)} onClick={() => removeGlobalBookmarks()}>Remove global bookmarks</button>
+              </div>
+              {bookmarkLoading ? <p role="status">Loading global topics…</p> : null}
+              {bookmarkError ? <p role="alert">{bookmarkError} <button type="button" disabled={Boolean(bookmarkBusy)} onClick={() => setBookmarkRevision((current) => current + 1)}>Try again</button></p> : null}
+              {bookmarkSetup === "legacy" && migrationDismissed ? <button type="button" disabled={!bookmarkCatalog} onClick={migrateBookmarks}>Migrate existing bookmarks</button> : null}
+            </section>
             <h2>{t(selectedColorId ? "savedMarkings" : "markingGroups")}</h2>
             {!selectedColorId && colors.length ? <>
               <label className="color-search group-search">
@@ -1450,7 +1593,7 @@ export default function Home() {
               </label>
               <div className="marking-groups scalable">
                 {visibleColors.map((color) => {
-                  const count = markings.filter((marking) => marking.colorId === color.id).length;
+                  const count = bookmarkDisplayRows(markings.filter((marking) => marking.colorId === color.id)).length;
                   return <button className={color.id === activeColorId ? "active" : ""} type="button" key={color.id} onClick={() => selectMarkingGroup(color.id)}>
                     <span className="marking-dot" style={{ backgroundColor: color.value }} />
                     <span><strong>{color.name}</strong><small>{countMessage(count, "oneMarking", "markingCount")}</small></span>
@@ -1466,9 +1609,14 @@ export default function Home() {
                 <strong>{colorMap.get(selectedColorId)?.name}</strong>
                 <small>{countMessage(sortedColorMarkings.length, "oneMarking", "markingCount")} · {t("bibleOrder")}</small>
               </div>
+              {colorMap.get(selectedColorId)?.source ? <div className="bookmark-actions topic-bookmark-actions">
+                <button type="button" disabled={Boolean(bookmarkBusy)} onClick={() => void downloadGlobalBookmarks(colorMap.get(selectedColorId)?.source?.topicId)}>{bookmarkBusy === colorMap.get(selectedColorId)?.source?.topicId ? "Downloading…" : "Download this topic’s global bookmarks"}</button>
+                <button type="button" disabled={Boolean(bookmarkBusy) || !sortedColorMarkings.some((row) => row.global)} onClick={() => removeGlobalBookmarks(colorMap.get(selectedColorId)?.source?.topicId)}>Remove this topic’s global bookmarks</button>
+              </div> : null}
               {sortedColorMarkings.length ? (
               <ul className="marking-list">
-                {sortedColorMarkings.map((marking) => {
+                {sortedColorMarkings.map((row) => {
+                  const marking = row.marking;
                   const color = colorMap.get(marking.colorId);
                   return (
                     <li key={marking.id}>
@@ -1482,9 +1630,9 @@ export default function Home() {
                           style={{ backgroundColor: color?.value }}
                         />
                         <span>
-                          <strong>{marking.reference ?? t("verseNumber", { verse: marking.verse })}</strong>
+                          <strong>{marking.reference ?? t("verseNumber", { verse: marking.verse })} {row.global ? <span className="global-bookmark-badge" title="Global bookmark" aria-label="Global bookmark">G</span> : null}</strong>
                           <small>{marking.quote}</small>
-                          <em>{color?.name ?? t("marking")}</em>
+                          <em>{color?.name ?? t("marking")}{row.personal && row.global ? " · personal bookmark also saved" : ""}</em>
                         </span>
                       </button>
                       <button
@@ -1493,7 +1641,7 @@ export default function Home() {
                         aria-label={t("deleteMarkingFor", { reference: marking.reference ?? marking.verse })}
                         onClick={() =>
                           setMarkings((current) =>
-                            current.filter((item) => item.id !== marking.id),
+                            current.filter((item) => !row.ids.includes(item.id)),
                           )
                         }
                       >
@@ -1523,7 +1671,7 @@ export default function Home() {
                     />
                     <input aria-label={t("groupColor", { name: color.name })} type="color" value={color.value} onChange={(event) => updateColor(color.id, { value: event.target.value })} />
                     <input aria-label={t("colorName")} type="text" value={color.name} onChange={(event) => updateColor(color.id, { name: event.target.value })} />
-                    <button className="remove-color" type="button" disabled={colors.length === 1} aria-label={t("removeGroup", { name: color.name })} onClick={() => removeColor(color.id)}>×</button>
+                    <button className="remove-color" type="button" aria-label={t("removeGroup", { name: color.name })} onClick={() => removeColor(color.id)}>×</button>
                   </div>
                 ))}
               </div>
@@ -1605,6 +1753,7 @@ export default function Home() {
             style={{ "--text-size": `${textSize}px` } as CSSProperties}
             data-reader-font={readerFont}
             onTouchStart={(event) => {
+              if (migrationOpen) return;
               const touch = event.changedTouches[0];
               if (!touch) return;
               const root = document.documentElement;
@@ -1615,6 +1764,7 @@ export default function Home() {
               };
             }}
             onTouchEnd={(event) => {
+              if (migrationOpen) return;
               const start = touchStart.current;
               const touch = event.changedTouches[0];
               touchStart.current = null;
@@ -1649,14 +1799,13 @@ export default function Home() {
               <button className="verification-button" type="button" aria-expanded={verifiedInfo} onClick={() => setVerifiedInfo((current) => !current)}>{t(verified ? "verified" : "saved")}</button>
             </header>
             {verifiedInfo ? <div className="verification-info" role="note">
-              {t(verified ? "verifiedExplanation" : "savedExplanation")}
+              {verified ? rich("verifiedExplanation", { getBibleApi: <a href="https://getbible.net/api/bible/" target="_blank" rel="noreferrer">getBible API</a> }) : t("savedExplanation")}
               <button type="button" aria-label={t("closeVerification")} onClick={() => setVerifiedInfo(false)}>×</button>
             </div> : null}
 
             <div className="reader-tool-actions">
               <button type="button" onClick={() => openStudy()}>Chapter commentary</button>
               <button type="button" onClick={() => openStudy({ word: "" })}>Dictionary</button>
-              <button type="button" onClick={() => setSharedBookmarksOpen(true)}>Shared bookmarks</button>
               <label><input type="checkbox" checked={annotationsEnabled} onChange={(event) => setAnnotationsEnabled(event.target.checked)} /> Study annotations</label>
             </div>
             {annotationsEnabled && (passage.introduction?.length || passage.titles?.length) ? <details className="chapter-source-introduction"><summary>About this chapter</summary>
@@ -1675,16 +1824,18 @@ export default function Home() {
                 const reference = `${passage.book_name} ${passage.chapter}:${verse.verse}`;
                 const verseNote = notes.find((note) => noteKey(note) === noteKey({ passage: route, verse: verse.verse }));
                 const arrival = searchArrival?.book === passage.book_nr && searchArrival.chapter === passage.chapter && searchArrival.verse === verse.verse ? searchArrival : null;
+                const dailySelected = dailyHighlight?.translation === route.translation && dailyHighlight.translation === passage.abbreviation && dailyHighlight.book === passage.book_nr && dailyHighlight.chapter === passage.chapter && dailyHighlight.verses.includes(verse.verse);
 
                 return (
                   <li
                     id={`v${verse.verse}`}
                     key={verse.verse}
-                    className={`${wholeMarking ? "whole-marked " : ""}${arrival ? "search-arrival " : ""}${annotationsEnabled && isParagraphStart(passage, verse) ? "editorial-paragraph-start" : ""}`.trim()}
+                    className={`${wholeMarking ? "whole-marked " : ""}${dailySelected ? "daily-verse-highlight " : ""}${arrival ? "search-arrival " : ""}${annotationsEnabled && isParagraphStart(passage, verse) ? "editorial-paragraph-start" : ""}`.trim()}
+                    data-daily-verse={dailySelected ? "true" : undefined}
                     data-search-arrival={arrival?.token}
                     style={
                       wholeColor
-                        ? { backgroundColor: translucentColor(wholeColor.value) }
+                        ? { backgroundColor: translucentColor(wholeColor.value), "--marking-color": wholeColor.value } as CSSProperties
                         : undefined
                     }
                   >
