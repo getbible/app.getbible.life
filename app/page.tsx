@@ -53,7 +53,7 @@ import {
   withoutTextSelectionMarkings,
   withoutWholeVerseMarking,
 } from "../lib/markings";
-import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyReference } from "../lib/daily";
+import { DEFAULT_TRANSLATION, loadDailyReference, resolveDailyPassage } from "../lib/daily";
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, normalizeReadingWidth, type ReadingWidth, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance";
@@ -63,7 +63,7 @@ import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from 
 import { floatingToolbarPosition, type FloatingRect, type FloatingToolbarPosition } from "../lib/floating-toolbar";
 
 import { clearStudyCache } from "../lib/study-api";
-import { clearQueryCache, searchScripture } from "../lib/scripture-api";
+import { clearQueryCache, queryScripture, searchScripture } from "../lib/scripture-api";
 import StudyPanel from "./components/StudyPanel";
 import { OfflineShell } from "./components/OfflineShell";
 import { SharedBookmarks } from "./components/SharedBookmarks";
@@ -86,7 +86,6 @@ const READING_WIDTH = "getbible-reader:reading-width:v1";
 const READER_LAYOUT = "getbible-reader:layout:v1";
 const NOTES = "getbible-reader:notes:v1";
 const LAST_READING = "getbible-reader:last-reading:v1";
-const DAILY_CACHE = "getbible-reader:daily:v1";
 const INITIAL_PASSAGE: Passage = { translation: "kjv", book: 43, chapter: 3 };
 
 type Drawer = "reader" | "markings" | null;
@@ -448,7 +447,7 @@ export default function Home() {
       url,
     );
     setPathBookSlug(selectedBookName ? bookSlug(selectedBookName) : null);
-    localStorage.setItem(LAST_PASSAGE, JSON.stringify(next));
+    try { localStorage.setItem(LAST_PASSAGE, JSON.stringify(next)); } catch { /* Navigation remains usable without persistence. */ }
     setMarkdownMode(false);
     setMarkdownMessage("");
     setRoute(next);
@@ -456,21 +455,12 @@ export default function Home() {
 
   const openDailyVerse = useCallback(async () => {
     try {
-      let daily = storedValue<unknown | null>(DAILY_CACHE, null);
-      let parsed = daily ? parseDailyReference(daily) : null;
-      if (!parsed || !dailyIsCurrent(parsed.date)) {
-        const response = await fetch(DAILY_SCRIPTURE_URL, { cache: "no-store" });
-        if (!response.ok) throw new Error(translatorRef.current("todaysScriptureLoadError"));
-        daily = await response.json();
-        parsed = parseDailyReference(daily);
-        localStorage.setItem(DAILY_CACHE, JSON.stringify(daily));
-      }
+      const parsed = await loadDailyReference();
       const allBooks = valuesByNumber((await loadBooks(DEFAULT_TRANSLATION)).data);
-      const normalize = (value: string) => value.toLocaleLowerCase().replace(/[^a-z0-9]/g, "");
-      const book = allBooks.find((item) => normalize(item.name) === normalize(parsed.bookName));
-      if (!book) throw new Error(translatorRef.current("todaysScriptureBookUnavailable", { book: parsed.bookName }));
-      setPendingVerse(parsed.verse);
-      go({ translation: DEFAULT_TRANSLATION, book: book.nr, chapter: parsed.chapter }, false, book.name);
+      const target = await resolveDailyPassage(parsed, allBooks, (reference) => queryScripture(DEFAULT_TRANSLATION, reference));
+      setError("");
+      setPendingVerse(target.verse);
+      go({ translation: target.translation, book: target.book, chapter: target.chapter }, false, target.bookName);
       setDrawer(null);
     } catch (caught) {
       console.error(caught);
@@ -572,7 +562,7 @@ export default function Home() {
   }, [go, pathBookSlug, ready, route]);
 
   useEffect(() => {
-    if (!passage || pendingVerse === null) return;
+    if (!passage || pendingVerse === null || passage.abbreviation !== route.translation || passage.book_nr !== route.book || passage.chapter !== route.chapter) return;
     const timer = window.setTimeout(() => {
       document.getElementById(`v${pendingVerse}`)?.scrollIntoView({
         behavior: "smooth",
@@ -581,7 +571,7 @@ export default function Home() {
       setPendingVerse(null);
     }, 80);
     return () => window.clearTimeout(timer);
-  }, [passage, pendingVerse]);
+  }, [passage, pendingVerse, route]);
 
   useEffect(() => {
     if (!searchArrival || !passage || passage.book_nr !== searchArrival.book || passage.chapter !== searchArrival.chapter) return;
