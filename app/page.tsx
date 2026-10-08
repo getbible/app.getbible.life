@@ -62,7 +62,8 @@ import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from "../lib/i18n";
 import { floatingToolbarPosition, type FloatingRect, type FloatingToolbarPosition } from "../lib/floating-toolbar";
 
-import { clearStudyCache } from "../lib/study-api";
+import { clearStudyCache, getDictionaryCatalog } from "../lib/study-api";
+import { prewarmDictionaryLookup } from "../lib/dictionary-lookup";
 import { clearQueryCache, queryScripture, searchScripture } from "../lib/scripture-api";
 import StudyPanel from "./components/StudyPanel";
 import { OfflineShell } from "./components/OfflineShell";
@@ -450,7 +451,7 @@ export default function Home() {
     try { localStorage.setItem(LAST_PASSAGE, JSON.stringify(next)); } catch { /* Navigation remains usable without persistence. */ }
     setMarkdownMode(false);
     setMarkdownMessage("");
-    setRoute(next);
+    setRoute((current) => current.translation === next.translation && current.book === next.book && current.chapter === next.chapter ? current : next);
   }, []);
 
   const openDailyVerse = useCallback(async () => {
@@ -560,6 +561,19 @@ export default function Home() {
 
     return () => { window.clearTimeout(loadingTimer); if (requestId.current === activeRequest) requestId.current += 1; };
   }, [go, pathBookSlug, ready, route]);
+
+  const dictionaryTranslation = passage?.abbreviation;
+  const dictionaryLanguage = passage?.lang ?? "en";
+  useEffect(() => {
+    if (!dictionaryTranslation) return;
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => {
+      void getDictionaryCatalog(controller.signal)
+        .then((catalog) => prewarmDictionaryLookup(catalog, dictionaryLanguage, controller.signal))
+        .catch(() => { /* Study reports any unavailable indexes when a lookup is requested. */ });
+    }, 500);
+    return () => { window.clearTimeout(timer); controller.abort(); };
+  }, [dictionaryTranslation, dictionaryLanguage]);
 
   useEffect(() => {
     if (!passage || pendingVerse === null || passage.abbreviation !== route.translation || passage.book_nr !== route.book || passage.chapter !== route.chapter) return;

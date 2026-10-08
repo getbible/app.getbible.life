@@ -12,7 +12,7 @@ export interface DictionarySummary {
   id: string; name: string; language: string; license: string;
   entry_count: number; unique_key_count: number; strong_prefix: "G" | "H" | null; bytes: number;
 }
-export interface DictionaryCatalog { schema: string; dictionaries: DictionarySummary[] }
+export interface DictionaryCatalog { schema: string; generated_at?: string; dictionaries: DictionarySummary[] }
 export interface DictionaryIndexEntry { id: string; key: string; search: string; aliases?: string[]; occurrence?: number }
 export interface DictionaryIndex { schema: string; dictionary: string; language: string; entries: DictionaryIndexEntry[] }
 export interface DictionaryEntry {
@@ -68,8 +68,13 @@ export class StudyApiError extends Error {
 const memory = new Map<string, { value: unknown; savedAt: number }>();
 const corpusMemory = new Map<string, unknown>();
 const corpusReads = new Map<string, Promise<unknown | null>>();
+const wholeDictionaryIndexes = new WeakMap<WholeDictionary, DictionaryIndex>();
+const wholeDictionaryEntries = new WeakMap<WholeDictionary, Map<string, DictionaryEntry>>();
 const activeRequests = new Set<AbortController>();
 let cacheGeneration = 0;
+let dictionaryRevision = 0;
+/** Derived word indexes must follow clear/download/remove operations too. */
+export const studyCacheRevision = () => `${cacheGeneration}/${dictionaryRevision}`;
 const MEMORY_TTL = 5 * 60 * 1_000;
 const MEMORY_LIMIT = 24;
 const CORPUS_LIMIT = 2;
@@ -136,11 +141,11 @@ async function network<T>(url: string, consume: (response: Response) => Promise<
     throw error;
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); activeRequests.delete(controller); }
 }
-async function request<T>(url: string, signal?: AbortSignal): Promise<T> {
+async function request<T>(url: string, signal?: AbortSignal, refresh = false): Promise<T> {
   const generation = cacheGeneration;
   aborted(signal);
   const recent = memory.get(url);
-  if (recent && Date.now() - recent.savedAt < MEMORY_TTL) { memory.delete(url); memory.set(url, recent); return recent.value as T; }
+  if (!refresh && recent && Date.now() - recent.savedAt < MEMORY_TTL) { memory.delete(url); memory.set(url, recent); return recent.value as T; }
   try {
     const { value, cacheResponse } = await network(url, async (response) => ({ cacheResponse: response.clone(), value: await response.json() as T }), signal);
     if (!value || typeof value !== "object") throw new StudyApiError("The study resource returned an invalid document.");
@@ -166,20 +171,36 @@ export const getCommentaryCatalog = (signal?: AbortSignal) => request<Commentary
 export const getCommentaryMetadata = (id: string, signal?: AbortSignal) => request<StudyMetadata>(`${COMMENTARIES_ROOT}/${segment(id)}/metadata.json`, signal);
 
 export function normalizeStudyTerm(value: string): string {
-  return value.normalize("NFD").replace(/\p{M}/gu, "").trim().toLocaleLowerCase().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+  return value.normalize("NFD").replace(/\p{M}/gu, "").toLowerCase().replace(/\s+/gu, " ").trim().replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "");
+}
+/** Match published headwords/aliases/IDs, never substrings or guessed inflections. */
+export function dictionaryEntryTerms(entry: DictionaryIndexEntry): string[] {
+  return [...new Set([entry.search, entry.key, entry.id, ...(entry.aliases ?? [])].map(normalizeStudyTerm).filter(Boolean))];
+}
+const dictionaryLookups = new WeakMap<DictionaryIndex, Map<string, DictionaryIndexEntry[]>>();
+function dictionaryLookup(index: DictionaryIndex) {
+  let lookup = dictionaryLookups.get(index);
+  if (!lookup) {
+    lookup = new Map();
+    for (const entry of index.entries) for (const key of dictionaryEntryTerms(entry)) {
+      const values = lookup.get(key);
+      if (values) values.push(entry); else lookup.set(key, [entry]);
+    }
+    dictionaryLookups.set(index, lookup);
+  }
+  return lookup;
 }
 export function findDictionaryMatches(index: DictionaryIndex, term: string, strong: string[] = []): DictionaryIndexEntry[] {
-  const needles = new Set(strong.map(normalizeStudyTerm).filter(Boolean));
-  const normalized = normalizeStudyTerm(term);
-  return index.entries.filter((entry) =>
-    needles.has(normalizeStudyTerm(entry.id)) ||
-    (entry.aliases ?? []).some((alias) => needles.has(normalizeStudyTerm(alias))) ||
-    (normalized !== "" && (entry.search === normalized || normalizeStudyTerm(entry.key) === normalized || (entry.aliases ?? []).some((alias) => normalizeStudyTerm(alias) === normalized)))
-  );
+  const lookup = dictionaryLookup(index);
+  const results = new Map<string, DictionaryIndexEntry>();
+  for (const needle of [term, ...strong].map(normalizeStudyTerm).filter(Boolean)) {
+    for (const entry of lookup.get(needle) ?? []) results.set(entry.id, entry);
+  }
+  return [...results.values()];
 }
 export function dictionarySuggestions(index: DictionaryIndex, term: string, limit = 20): DictionaryIndexEntry[] {
   const normalized = normalizeStudyTerm(term);
-  return normalized ? index.entries.filter((entry) => entry.search.startsWith(normalized)).slice(0, limit) : [];
+  return normalized ? index.entries.filter((entry) => normalizeStudyTerm(entry.search).startsWith(normalized)).slice(0, limit) : [];
 }
 export function defaultDictionary(dictionaries: DictionarySummary[], language: string, strong: string[] = [], remembered?: string | null): string {
   const locale = language.toLowerCase().split("-")[0];
@@ -196,22 +217,31 @@ export function defaultDictionary(dictionaries: DictionarySummary[], language: s
   return [...dictionaries].filter((dictionary) => dictionary.entry_count > 0).sort((a, b) => score(b) - score(a) || a.name.localeCompare(b.name))[0]?.id ?? "";
 }
 
-export async function getDictionaryIndex(id: string, signal?: AbortSignal): Promise<DictionaryIndex> {
+export async function getDictionaryIndex(id: string, signal?: AbortSignal, refresh = false): Promise<DictionaryIndex> {
   aborted(signal);
   const whole = await saved<WholeDictionary>(`${DICTIONARIES_ROOT}/${segment(id)}.json`, true);
   aborted(signal);
-  if (whole?.entries) return {
-    schema: "getbible-dictionary-index-v1", dictionary: id, language: whole.language,
-    entries: whole.entries.map((entry) => ({ id: entry.id, key: entry.key, search: normalizeStudyTerm(entry.key), aliases: entry.aliases, occurrence: entry.occurrence })),
-  };
-  return request<DictionaryIndex>(`${DICTIONARIES_ROOT}/${segment(id)}/index.json`, signal);
+  if (whole?.entries) {
+    let index = wholeDictionaryIndexes.get(whole);
+    if (!index) {
+      index = {
+        schema: "getbible-dictionary-index-v1", dictionary: id, language: whole.language,
+        entries: whole.entries.map((entry) => ({ id: entry.id, key: entry.key, search: normalizeStudyTerm(entry.key), aliases: entry.aliases, occurrence: entry.occurrence })),
+      };
+      wholeDictionaryIndexes.set(whole, index);
+    }
+    return index;
+  }
+  return request<DictionaryIndex>(`${DICTIONARIES_ROOT}/${segment(id)}/index.json`, signal, refresh);
 }
-export async function getDictionaryEntry(id: string, entry: string, signal?: AbortSignal): Promise<DictionaryEntry> {
+export async function getDictionaryEntry(id: string, entry: string, signal?: AbortSignal, refresh = false): Promise<DictionaryEntry> {
   aborted(signal);
   const whole = await saved<WholeDictionary>(`${DICTIONARIES_ROOT}/${segment(id)}.json`, true);
   aborted(signal);
-  const found = whole?.entries?.find((item) => item.id === entry);
-  return found ?? request<DictionaryEntry>(`${DICTIONARIES_ROOT}/${segment(id)}/${segment(entry)}.json`, signal);
+  let entries = whole ? wholeDictionaryEntries.get(whole) : undefined;
+  if (whole?.entries && !entries) { entries = new Map(whole.entries.map((item) => [item.id, item])); wholeDictionaryEntries.set(whole, entries); }
+  const found = entries?.get(entry);
+  return found ?? request<DictionaryEntry>(`${DICTIONARIES_ROOT}/${segment(id)}/${segment(entry)}.json`, signal, refresh);
 }
 export async function getCommentaryBooks(id: string, signal?: AbortSignal): Promise<CommentaryBooks> {
   aborted(signal);
@@ -314,6 +344,7 @@ export async function isStudyDownloaded(kind: ResourceKind, id: string): Promise
 export async function removeStudyDownload(kind: ResourceKind, id: string): Promise<void> {
   const url = `${resourceRoot(kind)}/${segment(id)}.json`;
   await (await store())?.delete(url); memory.delete(url); corpusMemory.delete(url);
+  if (kind === "dictionary") dictionaryRevision += 1;
 }
 export async function clearStudyCache(): Promise<void> {
   cacheGeneration += 1;
@@ -349,6 +380,7 @@ async function download<T>(root: string, path: string, manifestPath: string, sig
     if (generation !== cacheGeneration) throw new DOMException("Request cancelled", "AbortError");
     await cache.put(url, new Response(bytes, { headers: { "content-type": "application/json", "x-getbible-sha256": digest } }));
     rememberCorpus(url, value);
+    if (root === DICTIONARIES_ROOT) dictionaryRevision += 1;
     return value;
   }
   throw new StudyApiError("The download could not be verified.");
