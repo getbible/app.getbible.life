@@ -42,7 +42,6 @@ export interface Token {
   variantType?:string;
   variant?:boolean;
   morphSegmented?:boolean;
-  [key:string]:unknown;
 }
 /** Token coordinates are zero-based inclusive indexes, distinct from word positions. */
 export interface Span {
