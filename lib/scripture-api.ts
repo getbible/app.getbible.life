@@ -3,6 +3,8 @@ import type { SearchOptions, SearchVerse } from "./search.ts";
 
 export const QUERY_ROOT = "https://query.getbible.net/v3";
 export const SEARCH_ROOT = "https://search.getbible.net/v3";
+const QUERY_CACHE = "getbible-query-v3";
+const queryMemory = new Map<string,Record<string,Chapter>>();
 export type ServerSearchOptions = Omit<SearchOptions,"scope"> & {
   scope:SearchOptions["scope"]|"deuterocanon";
   sort?:"canonical"|"relevance";
@@ -42,6 +44,54 @@ function translationId(value:string):string {
   return normalized;
 }
 function abortError():Error { const error=new Error("Request cancelled");error.name="AbortError";return error; }
+const OSIS_BOOKS = "Gen Exod Lev Num Deut Josh Judg Ruth 1Sam 2Sam 1Kgs 2Kgs 1Chr 2Chr Ezra Neh Esth Job Ps Prov Eccl Song Isa Jer Lam Ezek Dan Hos Joel Amos Obad Jonah Mic Nah Hab Zeph Hag Zech Mal Matt Mark Luke John Acts Rom 1Cor 2Cor Gal Eph Phil Col 1Thess 2Thess 1Tim 2Tim Titus Phlm Heb Jas 1Pet 2Pet 1John 2John 3John Jude Rev".split(" ");
+const OSIS_IDS = new Map(OSIS_BOOKS.map((book,index)=>[book.toLowerCase(),index+1]));
+const OSIS_POINT = /^([1-4]?[a-z][a-z0-9]*)\.(\d+)(?:\.(\d+))?$/i;
+
+/** Convert source OSIS pointers while leaving ordinary user references untouched. */
+export function normalizeScriptureReference(reference:string):string {
+  const text=reference.trim(),parts=text.split(/[\s;]+/).filter(Boolean);
+  if (!parts.length || !parts.every(part=>OSIS_POINT.test(part.split("-")[0]))) return text;
+  return parts.map(part=>{
+    const [startText,endText,...extra]=part.split("-");
+    if (extra.length) throw new ScriptureApiError("This source reference has an unsupported range",400,"unsupported_reference");
+    const start=startText.match(OSIS_POINT)!;
+    const book=OSIS_IDS.get(start[1].toLowerCase()) ?? start[1];
+    const chapter=Number(start[2]),verse=start[3]===undefined?undefined:Number(start[3]);
+    for (const value of [chapter,...(verse===undefined?[]:[verse])]) {
+      if (!Number.isSafeInteger(value) || value<1) throw new ScriptureApiError("Invalid Scripture position",400,"invalid_reference");
+    }
+    const base=`${book} ${chapter}${verse===undefined?"":`:${verse}`}`;
+    if (!endText) return base;
+    const end=endText.match(OSIS_POINT);
+    const endVerse=/^\d+$/.test(endText)?Number(endText):end?.[3]===undefined?undefined:Number(end[3]);
+    if (!end && !/^\d+$/.test(endText)) throw new ScriptureApiError("This source reference has an unsupported range",400,"unsupported_reference");
+    const endBook=end?(OSIS_IDS.get(end[1].toLowerCase()) ?? end[1]):book;
+    if (endBook!==book || (end && Number(end[2])!==chapter))
+      throw new ScriptureApiError("This reference spans chapters. Open each passage separately.",400,"unsupported_reference");
+    if (verse===undefined || endVerse===undefined || !Number.isSafeInteger(endVerse) || endVerse<verse)
+      throw new ScriptureApiError("Invalid Scripture range",400,"invalid_reference");
+    return `${base}${endVerse===verse?"":`-${endVerse}`}`;
+  }).join(";");
+}
+async function cachedQuery(url:string):Promise<Record<string,Chapter>|null> {
+  if (queryMemory.has(url)) return queryMemory.get(url)!;
+  try {
+    const response=await (await caches.open(QUERY_CACHE)).match(url);
+    return response?await response.json() as Record<string,Chapter>:null;
+  } catch { return null; }
+}
+async function saveQuery(url:string,data:Record<string,Chapter>):Promise<void> {
+  queryMemory.delete(url);queryMemory.set(url,data);
+  while (queryMemory.size>48) queryMemory.delete(queryMemory.keys().next().value!);
+  try {
+    await (await caches.open(QUERY_CACHE)).put(url,new Response(JSON.stringify(data),{headers:{"content-type":"application/json"}}));
+  } catch { /* Reference reading remains available when storage is disabled. */ }
+}
+export async function clearQueryCache():Promise<void> {
+  queryMemory.clear();
+  try { await caches.delete(QUERY_CACHE); } catch { /* No persistent cache is available. */ }
+}
 async function getJson<T>(url:string,signal?:AbortSignal):Promise<T> {
   if (signal?.aborted) throw abortError();
   const controller=new AbortController();
@@ -72,12 +122,25 @@ async function getJson<T>(url:string,signal?:AbortSignal):Promise<T> {
 
 /** Resolve single, ranged or semicolon-chained references as one encoded path segment. */
 export async function queryScripture(translation:string,reference:string,signal?:AbortSignal):Promise<Chapter[]> {
-  const abbr=translationId(translation),text=reference.trim();
+  const abbr=translationId(translation),text=normalizeScriptureReference(reference);
   if (!text || text.length>512) throw new ScriptureApiError("Enter a Scripture reference of at most 512 characters",400,"invalid_reference");
-  const result=await getJson<Record<string,Chapter>>(`${QUERY_ROOT}/${encodeURIComponent(abbr)}/${encodeURIComponent(text)}`,signal);
+  const url=`${QUERY_ROOT}/${encodeURIComponent(abbr)}/${encodeURIComponent(text)}`;
+  let result:Record<string,Chapter>;
+  let fromCache=false;
+  try { result=await getJson<Record<string,Chapter>>(url,signal); }
+  catch(error) {
+    if (signal?.aborted || !(error instanceof ScriptureApiError) || (error.status!==0 && error.status<500)) throw error;
+    const saved=await cachedQuery(url);
+    if (signal?.aborted) throw abortError();
+    if (!saved) throw error;
+    result=saved;fromCache=true;
+  }
   const chapters=Object.values(result);
   if (!chapters.length) throw new ScriptureApiError("No Scripture was found for this reference",404,"reference_not_found");
   if (chapters.some(chapter=>!chapter || !Array.isArray(chapter.verses))) throw new ScriptureApiError("GetBible returned an invalid passage",502,"invalid_response");
+  if (signal?.aborted) throw abortError();
+  if (!fromCache) await saveQuery(url,result);
+  if (signal?.aborted) throw abortError();
   return chapters;
 }
 
@@ -114,7 +177,7 @@ export async function searchScripture(
   } else parameters.set("scope",options.scope==="ot"?"old_testament":options.scope==="nt"?"new_testament":options.scope==="deuterocanon"?"deuterocanon":"bible");
   for (const book of options.books ?? []) parameters.append("book",String(book));
   for (const excluded of options.exclude ?? []) parameters.append("exclude",excluded);
-  if (options.proximity !== undefined) parameters.set("proximity",String(options.proximity));
+  if (options.words==="all" && options.proximity !== undefined) parameters.set("proximity",String(options.proximity));
   const page=await getJson<SearchResponse>(`${SEARCH_ROOT}/${encodeURIComponent(abbr)}?${parameters}`,signal);
   if (!page.query || !page.results || !Array.isArray(page.matches) || !["search","reference"].includes(page.query.kind))
     throw new ScriptureApiError("GetBible returned an invalid search page",502,"invalid_response");
