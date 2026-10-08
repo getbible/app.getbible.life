@@ -18,6 +18,7 @@ export interface Marking {
   reference?: string;
   colorId: string;
   createdAt: number;
+  source?: { type: "shared-bookmark"; topicId: string };
 }
 
 export interface MarkedSegment {
@@ -49,7 +50,7 @@ export interface MarkingsBackup {
 
 export function markingIdentity(marking: Marking): string {
   if (marking.start === null && marking.end === null) {
-    return [canonicalPassageKey(marking.passage), marking.verse, "all", marking.colorId].join("|");
+    return [canonicalPassageKey(marking.passage), marking.verse, isSharedBookmarkMarking(marking) ? "shared" : "all", marking.colorId].join("|");
   }
   return [passageKey(marking.passage), marking.verse, marking.start, marking.end, marking.quote, marking.colorId].join("|");
 }
@@ -91,7 +92,7 @@ export function parseMarkingsBackup(value: unknown): MarkingsBackup {
     throw new Error("This markings backup has an unsupported format.");
   }
   const colorsValid = backup.colors.every((color) => color && typeof color.id === "string" && typeof color.name === "string" && /^#[0-9a-f]{6}$/i.test(color.value));
-  const markingsValid = backup.markings.every((marking) => marking && typeof marking.id === "string" && typeof marking.colorId === "string" && typeof marking.verse === "number" && typeof marking.quote === "string" && typeof marking.createdAt === "number" && marking.passage && typeof marking.passage.translation === "string" && typeof marking.passage.book === "number" && typeof marking.passage.chapter === "number");
+  const markingsValid = backup.markings.every((marking) => marking && typeof marking.id === "string" && typeof marking.colorId === "string" && typeof marking.verse === "number" && typeof marking.quote === "string" && typeof marking.createdAt === "number" && marking.passage && typeof marking.passage.translation === "string" && typeof marking.passage.book === "number" && typeof marking.passage.chapter === "number" && (marking.source === undefined || validSharedBookmarkSource(marking)));
   const notesValid = backup.notes === undefined || (Array.isArray(backup.notes) && backup.notes.every((note) => note && typeof note.id === "string" && typeof note.text === "string" && typeof note.verse === "number" && typeof note.reference === "string" && typeof note.createdAt === "number" && typeof note.updatedAt === "number" && note.passage && typeof note.passage.translation === "string" && typeof note.passage.book === "number" && typeof note.passage.chapter === "number"));
   if (!colorsValid || !markingsValid || !notesValid) throw new Error("This markings backup contains invalid data.");
   return backup as MarkingsBackup;
@@ -114,12 +115,32 @@ export function markingMatchesPassage(
     : passageKey(marking.passage) === passageKey(passage);
 }
 
+function validSharedBookmarkSource(marking: Marking): boolean {
+  const source = marking.source;
+  return !!source && typeof source === "object" && source.type === "shared-bookmark" &&
+    typeof source.topicId === "string" && source.topicId.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(source.topicId) &&
+    marking.colorId === `getbible-topic:${source.topicId}` && marking.start === null && marking.end === null;
+}
+
+/** Shared topic associations survive personal highlighting and remain independently deletable in their group. */
+export function isSharedBookmarkMarking(marking: Marking): boolean {
+  if (marking.start !== null || marking.end !== null) return false;
+  if (validSharedBookmarkSource(marking)) return true;
+  // Preserve earlier imports/backups that predate source metadata. Restrict the
+  // fallback to the exact deterministic source ID, not every mark in its group.
+  if (marking.source !== undefined || !marking.colorId.startsWith("getbible-topic:")) return false;
+  const topicId = marking.colorId.slice("getbible-topic:".length);
+  return topicId.length <= 80 && /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(topicId) &&
+    marking.id === `${marking.colorId}:${marking.passage.book}:${marking.passage.chapter}:${marking.verse}`;
+}
+
+export function personalWholeVerseMarking(markings: Marking[]): Marking | null {
+  return [...markings].reverse().find((marking) => marking.start === null && marking.end === null && !isSharedBookmarkMarking(marking)) ?? null;
+}
+
+/** A personal highlight takes visual precedence, regardless of when a topic was imported. */
 export function wholeVerseMarking(markings: Marking[]): Marking | null {
-  return (
-    [...markings]
-      .reverse()
-      .find((marking) => marking.start === null && marking.end === null) ?? null
-  );
+  return personalWholeVerseMarking(markings) ?? [...markings].reverse().find((marking) => marking.start === null && marking.end === null) ?? null;
 }
 
 export function withoutWholeVerseMarking(
@@ -133,6 +154,7 @@ export function withoutWholeVerseMarking(
         marking.verse === verse &&
         marking.start === null &&
         marking.end === null &&
+        !isSharedBookmarkMarking(marking) &&
         canonicalPassageKey(marking.passage) === canonicalPassageKey(passage)
       ),
   );
