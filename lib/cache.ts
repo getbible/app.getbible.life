@@ -17,6 +17,13 @@ type Metadata = {
 export type Result<T> = { data:T; cached:boolean; verified:boolean; persisted?:boolean };
 type Saved<T> = { data:T; persisted:boolean };
 const memory = new Map<string,Saved<unknown>>();
+function remember<T>(url:string,saved:Saved<T>):void {
+  memory.delete(url);memory.set(url,saved);
+  // Keep chapter reads fast without retaining every downloaded corpus in RAM.
+  const corpora=[...memory.keys()].filter(key=>key.startsWith(`${API_ROOT}/`) && /^[a-z0-9_-]+\.json$/.test(key.slice(API_ROOT.length+1)) && !key.endsWith("/translations.json"));
+  while (corpora.length>2) memory.delete(corpora.shift()!);
+  while (memory.size>64) memory.delete(memory.keys().next().value!);
+}
 const blank = ():Metadata => ({version:3,translations:{checkedAt:0,hashes:{}},books:{},chapters:{},loaded:{},full:{},fullChecked:{}});
 let memoryMetadata = blank();
 
@@ -33,18 +40,18 @@ function save(data:Metadata):void {
 }
 async function read<T>(url:string):Promise<Saved<T>|null> {
   const inMemory = memory.get(url);
-  if (inMemory) return inMemory as Saved<T>;
+  if (inMemory) { remember(url,inMemory);return inMemory as Saved<T>; }
   try {
     const response = await (await caches.open(CACHE)).match(url);
     if (!response) return null;
     const saved = { data:await response.json() as T, persisted:true };
-    memory.set(url,saved);
+    remember(url,saved);
     return saved;
   } catch { return null; }
 }
 async function write<T>(url:string,data:T,bytes?:ArrayBuffer):Promise<boolean> {
   const saved:Saved<T> = { data, persisted:false };
-  memory.set(url,saved);
+  remember(url,saved);
   try {
     await (await caches.open(CACHE)).put(url,new Response(bytes ?? JSON.stringify(data),{
       headers:{"content-type":"application/json"},
@@ -105,6 +112,10 @@ async function verifiedDocument<T>(url:string,sha:string,timeout=30_000):Promise
 const hashes = <T extends {sha:string}>(record:Record<string,T>):Record<string,string> =>
   Object.fromEntries(Object.entries(record).map(([key,value])=>[key,value.sha]));
 
+function invalidateLoaded(meta:Metadata,prefix:string):void {
+  for (const key of Object.keys(meta.loaded)) if (key.startsWith(prefix)) delete meta.loaded[key];
+}
+
 function fullTrusted(meta:Metadata,abbr:string):boolean {
   const sha=meta.full[abbr];
   return !!sha && validSha(sha) && fresh(meta.fullChecked[abbr] || 0) &&
@@ -149,8 +160,16 @@ export async function translations():Promise<Result<Record<string,Translation>>>
   if (saved && fresh(meta.translations.checkedAt)) return cached(saved,true);
   try {
     const {data,bytes}=await network<Record<string,Translation>>(url);
-    const next=metadata();
-    next.translations={checkedAt:Date.now(),hashes:hashes(data)};
+    const next=metadata(),updated=hashes(data);
+    for (const [abbr,previous] of Object.entries(next.translations.hashes)) {
+      if (updated[abbr]===previous) continue;
+      // Expire verification only. The old bodies remain available if refresh fails offline.
+      if (next.books[abbr]) next.books[abbr].checkedAt=0;
+      for (const [key,index] of Object.entries(next.chapters)) if (key.startsWith(`${abbr}/`)) index.checkedAt=0;
+      next.fullChecked[abbr]=0;
+      invalidateLoaded(next,`${abbr}/`);
+    }
+    next.translations={checkedAt:Date.now(),hashes:updated};
     save(next);
     const persisted=await write(url,data,bytes);
     return {data,cached:false,verified:true,persisted};
@@ -164,8 +183,15 @@ export async function books(translation:string):Promise<Result<Record<string,Boo
   const saved=await read<Record<string,Book>>(url);
   if (saved && fresh(meta.books[abbr]?.checkedAt || 0)) return cached(saved,true);
   try {
-    const {data,bytes}=await network<Record<string,Book>>(url),next=metadata();
-    next.books[abbr]={checkedAt:Date.now(),hashes:hashes(data)};save(next);
+    const {data,bytes}=await network<Record<string,Book>>(url),next=metadata(),updated=hashes(data);
+    for (const [book,previous] of Object.entries(next.books[abbr]?.hashes || {})) {
+      if (updated[book]===previous) continue;
+      const key=`${abbr}/${book}`;
+      if (next.chapters[key]) next.chapters[key].checkedAt=0;
+      next.fullChecked[abbr]=0;
+      invalidateLoaded(next,`${key}/`);
+    }
+    next.books[abbr]={checkedAt:Date.now(),hashes:updated};save(next);
     const persisted=await write(url,data,bytes);
     return {data,cached:false,verified:true,persisted};
   } catch(error) {
@@ -183,8 +209,11 @@ export async function chapters(translation:string,book:number):Promise<Result<Re
   const saved=await read<Record<string,ChapterInfo>>(url);
   if (saved && fresh(meta.chapters[key]?.checkedAt || 0)) return cached(saved,true);
   try {
-    const {data,bytes}=await network<Record<string,ChapterInfo>>(url),next=metadata();
-    next.chapters[key]={checkedAt:Date.now(),hashes:hashes(data)};save(next);
+    const {data,bytes}=await network<Record<string,ChapterInfo>>(url),next=metadata(),updated=hashes(data);
+    for (const [nr,previous] of Object.entries(next.chapters[key]?.hashes || {})) {
+      if (updated[nr]!==previous) delete next.loaded[`${key}/${nr}`];
+    }
+    next.chapters[key]={checkedAt:Date.now(),hashes:updated};save(next);
     const persisted=await write(url,data,bytes);
     return {data,cached:false,verified:true,persisted};
   } catch(error) {
