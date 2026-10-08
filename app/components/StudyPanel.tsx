@@ -1,0 +1,201 @@
+"use client";
+
+import { useEffect, useRef, useState } from "react";
+import {
+  commentsForVerse, defaultDictionary, dictionarySuggestions, downloadCommentary, downloadDictionary,
+  findDictionaryMatches, getCommentaryBooks, getCommentaryCatalog, getCommentaryChapter, getCommentaryMetadata,
+  getDictionaryCatalog, getDictionaryEntry, getDictionaryIndex, getDictionaryMetadata, isStudyDownloaded,
+  normalizeStudyTerm, removeStudyDownload, scriptureReferenceQuery, studyTextSegments,
+  type CommentaryChapter, type CommentaryEntry, type CommentarySummary, type DictionaryEntry,
+  type DictionaryIndexEntry, type DictionarySummary, type ScriptureReference, type StudyMetadata,
+} from "@/lib/study-api";
+import { useDialog } from "./useDialog";
+import "./study.css";
+
+export interface StudyPanelProps {
+  translation: string; language: string; book: number; chapter: number; verse?: number;
+  word?: string; strong?: string[]; onClose: () => void;
+  onReference: (reference: string) => void; onSearch: (text: string) => void;
+}
+type Tab = "dictionary" | "commentary";
+const EMPTY_STRONG: string[] = [];
+const preferenceKey = (kind: Tab, language: string) => `getbible-study:${kind}:${language.toLowerCase()}`;
+function remembered(kind: Tab, language: string): string | null {
+  try { return localStorage.getItem(preferenceKey(kind, language)); } catch { return null; }
+}
+function remember(kind: Tab, language: string, id: string) {
+  try { localStorage.setItem(preferenceKey(kind, language), id); } catch { /* A private session can still use the panel. */ }
+}
+const message = (error: unknown) => error instanceof Error ? error.message : "The study resource could not be loaded.";
+const cancelled = (error: unknown) => error instanceof Error && error.name === "AbortError";
+const formatSize = (bytes: number) => bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : `${Math.ceil(bytes / 1_000)} KB`;
+function resourceOrder<T extends { language: string; name: string }>(resources: T[], language: string): T[] {
+  const score = (item: T) => item.language === language ? 2 : item.language === "en" ? 1 : 0;
+  return [...resources].sort((a, b) => score(b) - score(a) || a.name.localeCompare(b.name));
+}
+
+/** Context changes reset the lookup while a reference modal can sit above it. */
+export function StudyPanel(props: StudyPanelProps) {
+  return <StudyContent key={`${props.translation}/${props.book}/${props.chapter}/${props.verse ?? "all"}/${props.word ?? ""}/${props.strong?.join(",") ?? ""}`} {...props} />;
+}
+export default StudyPanel;
+
+function CitationText({ text, references, onReference }: { text: string; references?: ScriptureReference[]; onReference: (reference: string) => void }) {
+  const unlocated = (references ?? []).filter((reference) => !reference.text || !text.includes(reference.text));
+  return <>
+    <div className="study-prose">{studyTextSegments(text, references).map((segment, index) => segment.reference && segment.reference.chapter > 0
+      ? <button className="study-reference" type="button" key={index} onClick={() => onReference(scriptureReferenceQuery(segment.reference!))} title={`Read ${segment.reference.ref}`}>{segment.text}</button>
+      : <span key={index}>{segment.text}</span>)}</div>
+    {unlocated.length ? <div className="study-citations" aria-label="Scripture references">{unlocated.filter((reference) => reference.chapter > 0).map((reference, index) => <button type="button" key={`${reference.ref}/${index}`} onClick={() => onReference(scriptureReferenceQuery(reference))}>{reference.ref}</button>)}</div> : null}
+  </>;
+}
+
+function StudyContent({ translation, language, book, chapter, verse, word, strong = EMPTY_STRONG, onClose, onReference, onSearch }: StudyPanelProps) {
+  const root = useRef<HTMLElement>(null);
+  useDialog(root, onClose);
+  const [tab, setTab] = useState<Tab>(word !== undefined || strong.length ? "dictionary" : "commentary");
+  const [dictionaries, setDictionaries] = useState<DictionarySummary[] | null>(null);
+  const [commentaries, setCommentaries] = useState<CommentarySummary[] | null>(null);
+  const [dictionary, setDictionary] = useState("");
+  const [commentary, setCommentary] = useState("");
+  const [catalogErrors, setCatalogErrors] = useState<Partial<Record<Tab, string>>>({});
+  const [retry, setRetry] = useState(0);
+  const [input, setInput] = useState(word ?? "");
+  const [term, setTerm] = useState(word ?? "");
+  const [explicitEntry, setExplicitEntry] = useState<string | null>(null);
+  const [lookup, setLookup] = useState<{ id: string; term: string; entry: string | null; entries: DictionaryEntry[]; suggestions: DictionaryIndexEntry[]; error: string }>({ id: "", term: "", entry: null, entries: [], suggestions: [], error: "" });
+  const [commentaryResult, setCommentaryResult] = useState<{ id: string; chapter?: CommentaryChapter; introduction?: CommentaryChapter; error: string }>({ id: "", error: "" });
+  const [wholeChapter, setWholeChapter] = useState(verse === undefined);
+  const [resource, setResource] = useState<{ kind: Tab; id: string; metadata?: StudyMetadata; downloaded: boolean }>({ kind: tab, id: "", downloaded: false });
+  const [download, setDownload] = useState<{ kind: Tab; id: string; busy: boolean; notice: string; error: string }>({ kind: tab, id: "", busy: false, notice: "", error: "" });
+  const downloadController = useRef<AbortController | null>(null);
+  const selected = tab === "dictionary" ? dictionary : commentary;
+  const summary = tab === "dictionary" ? dictionaries?.find((item) => item.id === dictionary) : commentaries?.find((item) => item.id === commentary);
+  const currentResource = resource.kind === tab && resource.id === selected ? resource : null;
+  const currentDownload = download.kind === tab && download.id === selected ? download : null;
+  const dictionaryReady = lookup.id === dictionary && lookup.term === term && lookup.entry === explicitEntry;
+  const commentaryReady = commentaryResult.id === commentary;
+
+  useEffect(() => () => downloadController.current?.abort(), []);
+
+  useEffect(() => {
+    const controller = new AbortController();
+    if (tab === "dictionary" && !dictionaries) {
+      getDictionaryCatalog(controller.signal).then((catalog) => {
+        setDictionaries(resourceOrder(catalog.dictionaries.filter((item) => item.entry_count > 0), language));
+        setDictionary(defaultDictionary(catalog.dictionaries, language, strong, remembered("dictionary", language)));
+        setCatalogErrors((current) => ({ ...current, dictionary: "" }));
+      }).catch((error) => { if (!cancelled(error)) setCatalogErrors((current) => ({ ...current, dictionary: message(error) })); });
+    }
+    if (tab === "commentary" && !commentaries) {
+      getCommentaryCatalog(controller.signal).then((catalog) => {
+        const resources = resourceOrder(catalog.commentaries.filter((item) => item.entry_count > 0), language);
+        const previous = remembered("commentary", language);
+        setCommentaries(resources);
+        setCommentary(resources.find((item) => item.id === previous)?.id ?? resources.find((item) => item.language === language && item.id === "mhcc")?.id ?? resources.find((item) => item.language === language)?.id ?? resources.find((item) => item.id === "mhcc")?.id ?? resources[0]?.id ?? "");
+        setCatalogErrors((current) => ({ ...current, commentary: "" }));
+      }).catch((error) => { if (!cancelled(error)) setCatalogErrors((current) => ({ ...current, commentary: message(error) })); });
+    }
+    return () => controller.abort();
+  }, [tab, dictionaries, commentaries, language, strong, retry]);
+
+  useEffect(() => {
+    if (tab !== "dictionary" || !dictionary) return;
+    const controller = new AbortController();
+    const activeStrong = normalizeStudyTerm(term) === normalizeStudyTerm(word ?? "") ? strong : [];
+    getDictionaryIndex(dictionary, controller.signal).then(async (index) => {
+      const matches = explicitEntry ? index.entries.filter((entry) => entry.id === explicitEntry) : findDictionaryMatches(index, term, activeStrong);
+      const entries = await Promise.all(matches.map((entry) => getDictionaryEntry(dictionary, entry.id, controller.signal)));
+      if (!controller.signal.aborted) setLookup({ id: dictionary, term, entry: explicitEntry, entries, suggestions: entries.length ? [] : dictionarySuggestions(index, term), error: "" });
+    }).catch((error) => { if (!cancelled(error)) setLookup({ id: dictionary, term, entry: explicitEntry, entries: [], suggestions: [], error: message(error) }); });
+    return () => controller.abort();
+  }, [tab, dictionary, term, explicitEntry, word, strong, retry]);
+
+  useEffect(() => {
+    if (tab !== "commentary" || !commentary) return;
+    const controller = new AbortController();
+    getCommentaryBooks(commentary, controller.signal).then(async (index) => {
+      const coverage = index.books.find((item) => item.book === book);
+      const [document, introduction] = await Promise.all([
+        coverage?.chapters.includes(chapter) ? getCommentaryChapter(commentary, book, chapter, controller.signal) : Promise.resolve(undefined),
+        coverage?.chapters.includes(0) ? getCommentaryChapter(commentary, book, 0, controller.signal) : Promise.resolve(undefined),
+      ]);
+      if (!controller.signal.aborted) setCommentaryResult({ id: commentary, chapter: document, introduction, error: "" });
+    }).catch((error) => { if (!cancelled(error)) setCommentaryResult({ id: commentary, error: message(error) }); });
+    return () => controller.abort();
+  }, [tab, commentary, book, chapter, retry]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const controller = new AbortController();
+    Promise.all([
+      (tab === "dictionary" ? getDictionaryMetadata : getCommentaryMetadata)(selected, controller.signal).catch(() => undefined),
+      isStudyDownloaded(tab, selected),
+    ]).then(([metadata, downloaded]) => { if (!controller.signal.aborted) setResource({ kind: tab, id: selected, metadata, downloaded }); });
+    return () => controller.abort();
+  }, [tab, selected]);
+
+  async function toggleDownload() {
+    if (!selected || !summary) return;
+    downloadController.current?.abort();
+    const controller = new AbortController();
+    downloadController.current = controller;
+    const kind = tab, id = selected;
+    setDownload({ kind, id, busy: true, notice: "", error: "" });
+    try {
+      if (currentResource?.downloaded) {
+        await removeStudyDownload(kind, id);
+        if (!controller.signal.aborted) {
+          setResource((current) => current.kind === kind && current.id === id ? { ...current, downloaded: false } : current);
+          setDownload({ kind, id, busy: false, notice: "Full offline download removed. Previously read entries may still be cached.", error: "" });
+        }
+      } else {
+        await (kind === "dictionary" ? downloadDictionary : downloadCommentary)(id, controller.signal);
+        if (!controller.signal.aborted) {
+          setResource((current) => current.kind === kind && current.id === id ? { ...current, downloaded: true } : current);
+          setDownload({ kind, id, busy: false, notice: "Complete resource saved and verified for offline reading.", error: "" });
+        }
+      }
+    } catch (error) { if (!cancelled(error)) setDownload({ kind, id, busy: false, notice: "", error: message(error) }); }
+  }
+  function chooseDictionary(id: string) { setDictionary(id); setExplicitEntry(null); remember("dictionary", language, id); }
+  function chooseTerm(value: string, entry: string | null = null) { setInput(value); setTerm(value); setExplicitEntry(entry); }
+  function renderComment(entry: CommentaryEntry, index: number) {
+    const coverage = entry.verses ?? [entry.verse];
+    return <article className="study-entry" key={`${entry.chapter}/${entry.verse}/${index}`}>
+      <h3>{entry.chapter === 0 ? "Book introduction" : entry.verse === 0 ? "Chapter introduction" : `Verse${coverage.length > 1 ? "s" : ""} ${coverage.join(", ")}`}</h3>
+      <CitationText text={entry.text} references={entry.references} onReference={onReference} />
+    </article>;
+  }
+  const comments = commentaryReady ? commentsForVerse(commentaryResult.chapter?.entries ?? [], wholeChapter ? undefined : verse) : [];
+  const chapterIntroductions = comments.filter((entry) => entry.verse === 0);
+  const verseComments = comments.filter((entry) => entry.verse !== 0);
+
+  return <div className="study-modal-backdrop" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose(); }}>
+    <section ref={root} className="study-modal" role="dialog" aria-modal="true" aria-labelledby="study-panel-title">
+      <header className="study-modal-header"><div><h2 id="study-panel-title">Study Scripture</h2><p>{translation.toUpperCase()} · Chapter {chapter}{verse === undefined ? "" : ` · Verse ${verse}`}</p></div><button type="button" className="study-close" aria-label="Close study resources" onClick={onClose}>×</button></header>
+      {word ? <div className="study-selected-word"><span>{word}</span><button type="button" onClick={() => onSearch(word)}>Search selection</button></div> : null}
+      <div className="study-resource-tabs" role="tablist" aria-label="Study resources">{(["dictionary", "commentary"] as const).map((kind) => <button type="button" role="tab" key={kind} id={`study-tab-${kind}`} aria-selected={tab === kind} aria-controls={`study-tabpanel-${kind}`} tabIndex={tab === kind ? 0 : -1} onClick={() => setTab(kind)} onKeyDown={(event) => { if (["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) { event.preventDefault(); const next = event.key === "Home" ? "dictionary" : event.key === "End" ? "commentary" : tab === "dictionary" ? "commentary" : "dictionary"; setTab(next); document.getElementById(`study-tab-${next}`)?.focus(); } }}>{kind === "dictionary" ? "Dictionaries" : "Commentaries"}</button>)}</div>
+      <div className="study-modal-body" id={`study-tabpanel-${tab}`} role="tabpanel" aria-labelledby={`study-tab-${tab}`}>
+        {catalogErrors[tab] ? <div className="study-status study-error" role="alert"><p>{catalogErrors[tab]}</p><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div> : !(tab === "dictionary" ? dictionaries : commentaries) ? <p className="study-status" role="status">Loading available {tab === "dictionary" ? "dictionaries" : "commentaries"}…</p> : <>
+          <label className="study-field"><span>{tab === "dictionary" ? "Dictionary" : "Commentary"}</span><select value={selected} onChange={(event) => tab === "dictionary" ? chooseDictionary(event.target.value) : (setCommentary(event.target.value), remember("commentary", language, event.target.value))}>{(tab === "dictionary" ? dictionaries : commentaries)?.map((item) => <option key={item.id} value={item.id}>{item.name} ({item.language})</option>)}</select></label>
+          {!selected ? <p className="study-status">No resources are available.</p> : <>
+            {tab === "dictionary" ? <>
+              <form className="study-term-form" onSubmit={(event) => { event.preventDefault(); chooseTerm(input); }}><label><span className="sr-only">Dictionary word or Strong’s number</span><input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Word or Strong’s number" autoComplete="off" /></label><button type="submit">Look up</button></form>
+              {strong.length ? <div className="study-strong-tokens" aria-label="Original-language words">{strong.map((token) => <button type="button" key={token} onClick={() => chooseTerm(token)}>{token}</button>)}</div> : null}
+              {!dictionaryReady ? <p className="study-status" role="status">Looking up {term || "this word"}…</p> : lookup.error ? <div className="study-status study-error" role="alert"><p>{lookup.error}</p><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div> : lookup.entries.length ? lookup.entries.map((entry) => <article className="study-entry" key={entry.id}><h3>{entry.key}{entry.occurrence > 1 ? <small> Definition {entry.occurrence}</small> : null}</h3><CitationText text={entry.text} references={entry.references} onReference={onReference} />{entry.see_also?.length ? <div className="study-related"><span>See also</span>{entry.see_also.map((link) => <button type="button" key={link.id} onClick={() => chooseTerm(link.key, link.id)}>{link.key}</button>)}</div> : null}</article>) : <div className="study-status"><p>{term || strong.length ? "No exact entry is published in this dictionary. Try another dictionary or a related word." : "Enter a word or Strong’s number to explore this dictionary."}</p>{lookup.suggestions.length ? <div className="study-suggestions"><span>Related entries</span>{lookup.suggestions.map((entry) => <button type="button" key={entry.id} onClick={() => chooseTerm(entry.key, entry.id)}>{entry.key}{entry.occurrence ? ` (${entry.occurrence})` : ""}</button>)}</div> : null}</div>}
+            </> : <>
+              {verse !== undefined ? <div className="study-comment-scope"><label><input type="checkbox" checked={wholeChapter} onChange={(event) => setWholeChapter(event.target.checked)} /> Show the whole chapter</label></div> : null}
+              {!commentaryReady ? <p className="study-status" role="status">Loading chapter commentary…</p> : commentaryResult.error ? <div className="study-status study-error" role="alert"><p>{commentaryResult.error}</p><button type="button" onClick={() => setRetry((value) => value + 1)}>Try again</button></div> : <>
+                {commentaryResult.introduction?.entries.length ? <details className="study-introduction"><summary>Book introduction</summary>{commentaryResult.introduction.entries.map(renderComment)}</details> : null}
+                {chapterIntroductions.length ? <details className="study-introduction"><summary>Chapter introduction</summary>{chapterIntroductions.map(renderComment)}</details> : null}
+                {verseComments.length ? verseComments.map(renderComment) : <p className="study-status">{commentaryResult.chapter ? `No commentary is published for ${wholeChapter ? "this chapter" : `verse ${verse}`}.` : "This commentary does not cover this chapter."}</p>}
+              </>}
+            </>}
+          </>}
+        </>}
+      </div>
+      {selected && summary ? <footer className="study-resource-footer"><div className="study-download-row"><button type="button" disabled={currentDownload?.busy || !currentResource} onClick={() => void toggleDownload()}>{currentDownload?.busy ? "Saving…" : currentResource?.downloaded ? "Remove offline download" : `Save offline · ${formatSize(summary.bytes)}`}</button>{currentResource?.downloaded ? <span>Available offline</span> : null}</div>{currentDownload?.notice ? <p role="status">{currentDownload.notice}</p> : null}{currentDownload?.error ? <p className="study-error" role="alert">{currentDownload.error}</p> : null}<details className="study-attribution"><summary>{summary.license || "Resource attribution"} · {summary.language}</summary><p>{currentResource?.metadata?.copyright || currentResource?.metadata?.copyright_holder || summary.name}</p>{currentResource?.metadata?.distribution_notes ? <p>{currentResource.metadata.distribution_notes}</p> : null}<p>Source: {currentResource?.metadata?.source || "CrossWire SWORD"}</p></details></footer> : null}
+    </section>
+  </div>;
+}
