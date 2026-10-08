@@ -1,4 +1,4 @@
-export const API_ROOT = "https://api.getbible.net/v2";
+export const API_ROOT = "https://api.getbible.net/v3";
 export const WEEK_MS = 604_800_000;
 
 export type Direction = "LTR" | "RTL" | string;
@@ -24,13 +24,64 @@ export interface Translation {
   sha:string;
   [key:string]:unknown;
 }
-export interface Book { nr:number; name:string; sha:string; direction:Direction }
-export interface ChapterInfo { chapter:number; name:string; sha:string }
-export interface Verse { chapter:number; verse:number; name:string; text:string }
-export interface Chapter { translation:string; abbreviation:string; language:string; direction:Direction; book_nr:number; book_name:string; chapter:number; name:string; verses:Verse[] }
-export interface WholeTranslationChapter { chapter:number; name:string; verses:Verse[] }
-export interface WholeTranslationBook { nr:number; name:string; chapters:WholeTranslationChapter[] }
-export interface WholeTranslation { translation:string; abbreviation:string; language:string; lang:string; direction:Direction; books:WholeTranslationBook[] }
+export interface Book { nr:number; name:string; sha:string; direction:Direction; url?:string }
+export interface ChapterInfo { chapter:number; name:string; sha:string; url?:string }
+/** Display-word coordinates are one-based and inclusive; zero means unlocated. */
+export interface Token {
+  token:string;
+  word_start:number;
+  word_end:number;
+  lemma?:Record<string,string[]>;
+  morph?:Record<string,string[]>;
+  xlit?:Record<string,string[]>;
+  src?:Array<number|string>;
+  gloss?:string;
+  n?:string;
+  type?:string;
+  subType?:string;
+  variantType?:string;
+  variant?:boolean;
+  morphSegmented?:boolean;
+  [key:string]:unknown;
+}
+/** Token coordinates are zero-based inclusive indexes, distinct from word positions. */
+export interface Span {
+  tag:string;
+  span:string;
+  token_start:number;
+  token_end:number;
+  word_start:number;
+  word_end:number;
+  attrs?:Record<string,string>;
+}
+export type Editorial =
+  | {order:number;type:"heading";anchor:{verse:number;edge:"before"};text:string;heading_type:string;canonical:boolean}
+  | {order:number;type:"paragraph";start:number;end:number};
+export interface Introduction { text:string; [key:string]:unknown }
+export interface Title { text:string;type?:string;canonical?:boolean;subtype?:string;tokens?:Token[];spans?:Span[] }
+export interface Verse { chapter:number; verse:number; name:string; text:string; paragraph?:boolean; tokens?:Token[]; spans?:Span[]; [key:string]:unknown }
+export interface WholeTranslationChapter {
+  chapter:number;
+  name:string;
+  verses:Verse[];
+  editorial?:Editorial[];
+  introduction?:Introduction[];
+  titles?:Title[];
+  [key:string]:unknown;
+}
+export interface Chapter extends WholeTranslationChapter {
+  translation:string;
+  abbreviation:string;
+  language:string;
+  lang?:string;
+  direction:Direction;
+  encoding?:string;
+  book_nr:number;
+  book_name:string;
+  ref?:string[];
+}
+export interface WholeTranslationBook { nr:number; name:string; chapters:WholeTranslationChapter[];titles?:Title[];introduction?:Introduction[];[key:string]:unknown }
+export interface WholeTranslation { translation:string; abbreviation:string; language:string; lang:string; direction:Direction;encoding?:string;books:WholeTranslationBook[];titles?:Title[];introduction?:Introduction[];[key:string]:unknown }
 export interface Passage { translation:string; book:number; chapter:number }
 
 export const valuesByNumber = <T>(record:Record<string,T>):T[] =>
