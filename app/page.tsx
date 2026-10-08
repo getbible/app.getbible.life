@@ -34,6 +34,7 @@ import {
   chapters as loadChapters,
   clearCache,
   fullTranslation as loadFullTranslation,
+  fullTranslationAvailable,
   translations as loadTranslations,
 } from "../lib/cache";
 import {
@@ -44,11 +45,11 @@ import {
   mergeColors,
   mergeMarkings,
   parseMarkingsBackup,
-  markedSegments,
   markingMatchesPassage,
   textSelectionHasMarking,
   translucentColor,
   wholeVerseMarking,
+  personalWholeVerseMarking,
   withoutTextSelectionMarkings,
   withoutWholeVerseMarking,
 } from "../lib/markings";
@@ -56,12 +57,22 @@ import { DAILY_SCRIPTURE_URL, DEFAULT_TRANSLATION, dailyIsCurrent, parseDailyRef
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, normalizeReadingWidth, type ReadingWidth, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance";
-import { flattenTranslation, highlightSearchText, SEARCH_ARRIVAL_MS, searchVersePageAsync, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
+import { highlightSearchText, SEARCH_ARRIVAL_MS, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from "../lib/i18n";
 import { floatingToolbarPosition, type FloatingRect, type FloatingToolbarPosition } from "../lib/floating-toolbar";
 
+import { clearStudyCache } from "../lib/study-api";
+import { clearQueryCache, searchScripture } from "../lib/scripture-api";
+import StudyPanel from "./components/StudyPanel";
+import { OfflineShell } from "./components/OfflineShell";
+import { SharedBookmarks } from "./components/SharedBookmarks";
+import { ReferenceModal } from "./components/ReferenceModal";
+import { ScriptureText, VerseAnnotations } from "./components/ScriptureText";
+import { getVerseHeadings, isParagraphStart } from "../lib/annotations";
+
 const LAST_PASSAGE = "getbible-reader:last:v1";
+const SOURCE_ANNOTATIONS = "getbible-reader:source-annotations:v1";
 const THEME = "getbible-reader:theme:v1";
 const THEME_MODE = "getbible-reader:theme-mode:v1";
 const TEXT_SIZE = "getbible-reader:size:v1";
@@ -204,8 +215,20 @@ export default function Home() {
   const [searchMatch, setSearchMatch] = useState<MatchMode>("exact");
   const [searchCaseSensitive, setSearchCaseSensitive] = useState(false);
   const [searchScope, setSearchScope] = useState<SearchScope>("all");
-  const [searchCorpus, setSearchCorpus] = useState<SearchVerse[]>([]);
-  const [searchCorpusKey, setSearchCorpusKey] = useState("");
+  const [searchTotal, setSearchTotal] = useState(0);
+  const [searchSha, setSearchSha] = useState<string | undefined>();
+  const [searchSort, setSearchSort] = useState<"canonical" | "relevance">("canonical");
+  const [searchDiacritics, setSearchDiacritics] = useState<"fold" | "exact">("fold");
+  const [searchExclude, setSearchExclude] = useState("");
+  const [searchProximity, setSearchProximity] = useState<number | undefined>();
+  const [searchRevision, setSearchRevision] = useState(0);
+  const [studyTarget, setStudyTarget] = useState<{verse?:number;word?:string;strong?:string[]}|null>(null);
+  const [sharedBookmarksOpen, setSharedBookmarksOpen] = useState(false);
+  const [referenceTarget, setReferenceTarget] = useState<string | null>(null);
+  const [annotationsEnabled, setAnnotationsEnabled] = useState(true);
+  const [offlineAvailable, setOfflineAvailable] = useState(false);
+  const [offlineLoading, setOfflineLoading] = useState(false);
+  const [offlineMessage, setOfflineMessage] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
   const [searchResults, setSearchResults] = useState<SearchVerse[]>([]);
@@ -217,8 +240,9 @@ export default function Home() {
   const [uiMessages, setUiMessages] = useState<{ locale: string; messages: readonly string[] }>({ locale: "en", messages: [] });
   const requestId = useRef(0);
   const booksRef = useRef<Book[]>([]);
-  const searchRequestId = useRef(0);
+  const searchAbort = useRef<AbortController | null>(null);
   const searchScanId = useRef(0);
+  const offlineRequestId = useRef(0);
   const touchStart = useRef<{ x: number; y: number; boundary: -1 | 0 | 1 } | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const boundaryLock = useRef(false);
@@ -321,6 +345,7 @@ export default function Home() {
       const savedActive = localStorage.getItem(ACTIVE_COLOR);
 
       setRoute(next);
+      setAnnotationsEnabled(storedValue<boolean>(SOURCE_ANNOTATIONS, true));
       setDark(document.documentElement.dataset.theme === "dark");
       setThemeMode((localStorage.getItem(THEME_MODE) ?? (localStorage.getItem(THEME) ? "manual" : "system")) === "manual" ? "manual" : "system");
       setTextSize(
@@ -387,11 +412,16 @@ export default function Home() {
   }, [locale, translation?.direction]);
 
   useEffect(() => {
-    if (!searchOpen && !infoModal) return;
+    if (!searchOpen && !infoModal && !studyTarget && !sharedBookmarksOpen && !referenceTarget) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previous; };
-  }, [infoModal, searchOpen]);
+  }, [infoModal, searchOpen, studyTarget, sharedBookmarksOpen, referenceTarget]);
+
+  useEffect(() => {
+    if (!ready) return;
+    try { localStorage.setItem(SOURCE_ANNOTATIONS, JSON.stringify(annotationsEnabled)); } catch { /* Keep the current reading preference in memory. */ }
+  }, [annotationsEnabled, ready]);
 
   useEffect(() => {
     if (!markingsReady) return;
@@ -469,6 +499,7 @@ export default function Home() {
     void (async () => {
       try {
         const translationResult = await loadTranslations();
+        if (activeRequest !== requestId.current) return;
         const allTranslations = translationValues(translationResult.data);
         const selectedTranslation =
           allTranslations.find((item) => item.abbreviation === route.translation) ??
@@ -477,6 +508,7 @@ export default function Home() {
         if (!selectedTranslation) throw new Error(translatorRef.current("noTranslations"));
 
         const bookResult = await loadBooks(selectedTranslation.abbreviation);
+        if (activeRequest !== requestId.current) return;
         const allBooks = valuesByNumber(bookResult.data);
         booksRef.current = allBooks;
         const selectedBook =
@@ -488,6 +520,7 @@ export default function Home() {
           selectedTranslation.abbreviation,
           selectedBook.nr,
         );
+        if (activeRequest !== requestId.current) return;
         const allChapters = valuesByNumber(chapterResult.data);
         const selectedChapter =
           allChapters.find((item) => item.chapter === route.chapter) ??
@@ -535,7 +568,7 @@ export default function Home() {
       }
     })();
 
-    return () => window.clearTimeout(loadingTimer);
+    return () => { window.clearTimeout(loadingTimer); if (requestId.current === activeRequest) requestId.current += 1; };
   }, [go, pathBookSlug, ready, route]);
 
   useEffect(() => {
@@ -608,22 +641,26 @@ export default function Home() {
         setDrawer(null);
         setSearchOpen(false);
         setInfoModal(null);
+        setStudyTarget(null);
+        setSharedBookmarksOpen(false);
+        setReferenceTarget(null);
         setNoteEditor(null);
         closeSelectionToolbar();
       }
+      if (studyTarget || sharedBookmarksOpen || referenceTarget || searchOpen || infoModal) return;
       if (event.altKey && event.key === "ArrowLeft") void turn(-1);
       if (event.altKey && event.key === "ArrowRight") void turn(1);
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [closeSelectionToolbar, turn]);
+  }, [closeSelectionToolbar, turn, studyTarget, sharedBookmarksOpen, referenceTarget, searchOpen, infoModal]);
 
   useEffect(() => {
     boundaryLock.current = false;
     boundaryAttempt.current = null;
     wheelGestureActive.current = false;
     window.clearTimeout(wheelGestureTimer.current);
-    if (drawer || searchOpen || infoModal || markdownMode || loading || !passage) return;
+    if (drawer || searchOpen || infoModal || studyTarget || sharedBookmarksOpen || referenceTarget || markdownMode || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
@@ -650,83 +687,103 @@ export default function Home() {
       window.clearTimeout(wheelGestureTimer.current);
       window.removeEventListener("wheel", wheel);
     };
-  }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, turn]);
+  }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, studyTarget, sharedBookmarksOpen, referenceTarget, turn]);
+
+  const searchOptions = useMemo(() => ({
+    words: searchWords, match: searchMatch, caseSensitive: searchCaseSensitive,
+    scope: searchScope, locale: translation?.lang, sort: searchSort,
+    diacritics: searchDiacritics, exclude: searchExclude.trim().split(/\s+/).filter(Boolean),
+    ...(searchWords === "all" && searchProximity !== undefined ? { proximity: searchProximity } : {}), limit: 25,
+  }), [searchWords, searchMatch, searchCaseSensitive, searchScope, translation?.lang, searchSort, searchDiacritics, searchExclude, searchProximity]);
 
   useEffect(() => {
-    const query = searchQuery.trim();
-    if (!searchOpen || !query || !translation) return;
-    const key = `${translation.abbreviation}:${translation.sha}`;
-    if (searchCorpusKey === key) return;
-    const activeRequest = ++searchRequestId.current;
-    const timer = window.setTimeout(() => {
-      setSearchLoading(true);
-      setSearchError("");
-      void loadFullTranslation(translation.abbreviation, translation.sha)
-        .then((result) => {
-          if (activeRequest !== searchRequestId.current) return;
-          setSearchCorpus(flattenTranslation(result.data));
-          setSearchCorpusKey(key);
-        })
-        .catch((caught) => {
-          if (activeRequest === searchRequestId.current) {
-            console.error(caught);
-            setSearchError(translatorRef.current("searchInitializationError"));
-          }
-        })
-        .finally(() => {
-          if (activeRequest === searchRequestId.current) setSearchLoading(false);
-        });
-    }, 180);
-    return () => window.clearTimeout(timer);
-  }, [searchCorpusKey, searchOpen, searchQuery, translation]);
-
-  const searchNeedsInitialization = Boolean(searchQuery.trim() && translation && searchCorpusKey !== `${translation.abbreviation}:${translation.sha}`);
-
-  useEffect(() => {
-    if (!searchQuery.trim() || searchNeedsInitialization || searchLoading || searchError) return;
     const scan = ++searchScanId.current;
-    const timer = window.setTimeout(() => {
-      setSearchRunning(true);
-      void searchVersePageAsync(searchCorpus, searchQuery, {
-        words: searchWords,
-        match: searchMatch,
-        caseSensitive: searchCaseSensitive,
-        scope: searchScope,
-        locale: translation?.lang,
-      }, 0, 20, () => scan !== searchScanId.current).then((page) => {
-        if (scan !== searchScanId.current) return;
-        setSearchResults(page.results);
-        setSearchCursor(page.nextCursor);
-        setSearchComplete(page.complete);
-        setSearchRunning(false);
-      });
+    searchAbort.current?.abort();
+    const controller = new AbortController();
+    searchAbort.current = controller;
+    const resetTimer = window.setTimeout(() => {
+      setSearchResults([]); setSearchCursor(0); setSearchTotal(0); setSearchSha(undefined); setSearchError("");
+      setSearchLoading(Boolean(searchOpen && searchQuery.trim() && translation));
+      setSearchRunning(Boolean(searchOpen && searchQuery.trim() && translation));
+      setSearchComplete(!searchOpen || !searchQuery.trim());
     }, 0);
-    return () => window.clearTimeout(timer);
-  }, [searchCaseSensitive, searchCorpus, searchError, searchLoading, searchMatch, searchNeedsInitialization, searchQuery, searchScope, searchWords, translation?.lang]);
+    if (!searchOpen || !searchQuery.trim() || !translation) {
+      return () => { window.clearTimeout(resetTimer); controller.abort(); };
+    }
+    const timer = window.setTimeout(() => {
+      void searchScripture(translation.abbreviation, searchQuery, searchOptions, 0, controller.signal).then((page) => {
+        if (scan !== searchScanId.current || controller.signal.aborted) return;
+        setSearchResults(page.results); setSearchCursor(page.nextCursor); setSearchComplete(page.complete);
+        setSearchTotal(page.total); setSearchSha(page.sha);
+      }).catch((caught: unknown) => {
+        if (scan === searchScanId.current && !controller.signal.aborted) setSearchError(caught instanceof Error ? caught.message : "Unable to search Scripture.");
+      }).finally(() => {
+        if (scan === searchScanId.current && !controller.signal.aborted) { setSearchLoading(false); setSearchRunning(false); }
+      });
+    }, 250);
+    return () => { window.clearTimeout(resetTimer); window.clearTimeout(timer); controller.abort(); };
+  }, [searchOpen, searchQuery, translation, searchOptions, searchRevision]);
 
   const loadMoreSearchResults = () => {
-    if (searchRunning || searchComplete || searchNeedsInitialization || !searchQuery.trim()) return;
-    const scan = ++searchScanId.current;
-    setSearchRunning(true);
-    window.setTimeout(() => {
-      void searchVersePageAsync(searchCorpus, searchQuery, {
-        words: searchWords,
-        match: searchMatch,
-        caseSensitive: searchCaseSensitive,
-        scope: searchScope,
-        locale: translation?.lang,
-      }, searchCursor, 20, () => scan !== searchScanId.current).then((page) => {
-        if (scan !== searchScanId.current) return;
-        setSearchResults((current) => [...current, ...page.results]);
-        setSearchCursor(page.nextCursor);
-        setSearchComplete(page.complete);
-        setSearchRunning(false);
+    if (searchRunning || searchLoading || searchComplete || !searchQuery.trim() || !translation) return;
+    const scan = searchScanId.current;
+    searchAbort.current?.abort();
+    const controller = new AbortController(); searchAbort.current = controller;
+    setSearchRunning(true); setSearchError("");
+    void searchScripture(translation.abbreviation, searchQuery, searchOptions, searchCursor, controller.signal).then((page) => {
+      if (scan !== searchScanId.current || controller.signal.aborted) return;
+      if (searchSha && page.sha && searchSha !== page.sha) throw new Error("The translation changed during this search. Run your search again.");
+      setSearchResults((current) => {
+        const seen = new Set(current.map((item) => item.book + "/" + item.chapter + "/" + item.verse));
+        return [...current, ...page.results.filter((item) => !seen.has(item.book + "/" + item.chapter + "/" + item.verse))];
       });
-    }, 0);
+      setSearchCursor(page.nextCursor); setSearchComplete(page.complete); setSearchTotal(page.total);
+    }).catch((caught: unknown) => {
+      if (scan === searchScanId.current && !controller.signal.aborted) setSearchError(caught instanceof Error ? caught.message : "Unable to load more results.");
+    }).finally(() => { if (scan === searchScanId.current && !controller.signal.aborted) setSearchRunning(false); });
+  };
+
+  useEffect(() => {
+    let active = true;
+    offlineRequestId.current += 1;
+    void fullTranslationAvailable(route.translation).then((available) => {
+      if (active) { setOfflineLoading(false); setOfflineMessage(""); setOfflineAvailable(available); }
+    });
+    return () => { active = false; };
+  }, [route.translation]);
+
+  const downloadTranslation = async () => {
+    if (!translation || offlineLoading) return;
+    const abbreviation = translation.abbreviation;
+    const download = ++offlineRequestId.current;
+    setOfflineLoading(true); setOfflineMessage("");
+    try {
+      const downloaded = await loadFullTranslation(abbreviation, translation.sha);
+      const saved = await fullTranslationAvailable(abbreviation);
+      if (download !== offlineRequestId.current) return;
+      setOfflineAvailable(saved);
+      setOfflineMessage(saved ? (downloaded.verified ? "Translation saved for offline reading, including available study metadata." : "Previously saved translation is still available. The update could not be verified.") : "Downloaded, but this browser could not save it. Check available storage.");
+    } catch (caught) { if (download === offlineRequestId.current) setOfflineMessage(caught instanceof Error ? caught.message : "Unable to download this translation."); }
+    finally { if (download === offlineRequestId.current) setOfflineLoading(false); }
+  };
+
+  const openReference = (reference: string) => {
+    closeSelectionToolbar(); setReferenceTarget(reference);
+  };
+  const openStudy = (target: {verse?:number;word?:string;strong?:string[]} = {}) => {
+    closeSelectionToolbar(); setSearchOpen(false); setDrawer(null); setStudyTarget(target);
+  };
+  const openStudySearch = (text: string) => {
+    setStudyTarget(null); closeSelectionToolbar(); restartSearch(text);
+  };
+  const openStudyPassage = (book: number, chapter: number, verse: number) => {
+    setReferenceTarget(null); setSharedBookmarksOpen(false); setStudyTarget(null); setPendingVerse(verse);
+    go({ translation: route.translation, book, chapter });
   };
 
   const restartSearch = (value: string) => {
     setSearchQuery(value);
+    setSearchRevision((current) => current + 1);
     searchScanId.current += 1;
     setSearchResults([]);
     setSearchCursor(0);
@@ -819,13 +876,8 @@ export default function Home() {
 
   const applyWholeVerseMarking = (selection: WholeVerseSelection, colorId: string) => {
     setMarkings((current) => {
-      const existingIds = new Set(
-        current
-          .filter((marking) => markingMatchesPassage(marking, route) && marking.verse === selection.verse && marking.start === null && marking.end === null)
-          .map((marking) => marking.id),
-      );
       return [
-        ...current.filter((marking) => !existingIds.has(marking.id)),
+        ...withoutWholeVerseMarking(current, route, selection.verse),
         { id: identifier(), passage: route, verse: selection.verse, start: null, end: null, quote: selection.text, reference: selection.reference, colorId, createdAt: Date.now() },
       ];
     });
@@ -966,13 +1018,19 @@ export default function Home() {
   const clearAllLocalData = async () => {
     if (!window.confirm(t("clearAllConfirm"))) return;
     await clearCache();
+    await clearQueryCache();
+    await clearStudyCache();
+    try {
+      const ownedCaches = (await caches.keys()).filter((name) => name.startsWith("getbible-shell-") || name === "getbible-reader-v1" || name === "getbible-query-v3");
+      await Promise.all(ownedCaches.map((name) => caches.delete(name)));
+    } catch { /* Reading remains usable when cache storage is disabled. */ }
     readerStorageKeys(Object.keys(localStorage)).forEach((key) => localStorage.removeItem(key));
     setMarkings([]);
     setNotes([]);
     setColors(DEFAULT_MARKING_COLORS);
     setActiveColorId(DEFAULT_MARKING_COLORS[0].id);
-    setSearchCorpus([]);
-    setSearchCorpusKey("");
+    setOfflineAvailable(false);
+    setOfflineMessage("");
     setSearchQuery("");
     setSearchResults([]);
     setSearchOpen(false);
@@ -1031,6 +1089,7 @@ export default function Home() {
 
   return (
     <main className={drawer ? "drawer-open" : ""}>
+      <OfflineShell />
       <header className="topbar">
         <button
           className="menu-button"
@@ -1091,10 +1150,17 @@ export default function Home() {
         </button> : null}
       </header>
 
+      {studyTarget ? <StudyPanel translation={route.translation} language={translation?.lang || "en"} book={route.book} chapter={route.chapter} {...studyTarget} onClose={() => setStudyTarget(null)} onReference={openReference} onSearch={openStudySearch} /> : null}
+      {sharedBookmarksOpen ? <SharedBookmarks translation={route.translation} language={translation?.lang || "en"} onClose={() => setSharedBookmarksOpen(false)} onReference={openReference} onOpen={openStudyPassage} onImport={(importedColors, importedMarkings) => {
+        setColors((current) => mergeColors(current, importedColors));
+        setMarkings((current) => mergeMarkings(current, importedMarkings));
+      }} /> : null}
+      {referenceTarget ? <ReferenceModal translation={route.translation} reference={referenceTarget} onClose={() => setReferenceTarget(null)} onOpen={openStudyPassage} /> : null}
+
       {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label={t("searchBible")}>
         <div className="search-heading">
-          <div><strong>{t("searchTranslation", { translation: translation?.abbreviation.toUpperCase() ?? "" })}</strong><small>{searchCorpusKey ? t("versesReadyOffline", { count: searchCorpus.length.toLocaleString(locale) }) : t("wholeTranslationCached")}</small></div>
-          <button type="button" aria-label={t("closeSearch")} onClick={() => { searchScanId.current += 1; setSearchRunning(false); setSearchOpen(false); }}>×</button>
+          <div><strong>{t("searchTranslation", { translation: translation?.abbreviation.toUpperCase() ?? "" })}</strong><small>Search words or Scripture references · {searchTotal.toLocaleString(locale)} results</small></div>
+          <button type="button" aria-label={t("closeSearch")} onClick={() => { searchScanId.current += 1; searchAbort.current?.abort(); setSearchRunning(false); setSearchOpen(false); }}>×</button>
         </div>
         <label className="search-query">
           <span className="sr-only">{t("searchThisTranslation")}</span>
@@ -1115,19 +1181,25 @@ export default function Home() {
             {books.map((book) => <option key={book.nr} value={`book:${book.nr}`}>{book.name}</option>)}
           </select></label>
         </div>
+        <details className="search-advanced"><summary>More filters</summary>
+          <label>Sort <select value={searchSort} onChange={(event) => setSearchSort(event.target.value as "canonical" | "relevance")}><option value="canonical">Bible order</option><option value="relevance">Relevance</option></select></label>
+          <label>Accents <select value={searchDiacritics} onChange={(event) => setSearchDiacritics(event.target.value as "fold" | "exact")}><option value="fold">Ignore accents</option><option value="exact">Match accents</option></select></label>
+          <label>Exclude <input value={searchExclude} onChange={(event) => setSearchExclude(event.target.value)} placeholder="Words to exclude" /></label>
+          <label>Within words <input type="number" min="0" max="100" disabled={searchWords !== "all"} value={searchProximity ?? ""} placeholder="Any distance" onChange={(event) => setSearchProximity(event.target.value === "" ? undefined : Math.max(0,Math.min(100,Number(event.target.value)||0)))} /></label>
+        </details>
         <div className="search-results" aria-live="polite" onScroll={(event) => {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 180) loadMoreSearchResults();
         }}>
-          {!searchQuery.trim() ? <p className="search-prompt">{t("searchPrompt")}</p> : searchError ? <p className="search-error">{searchError}</p> : searchLoading || searchNeedsInitialization ? <div className="search-initializing"><i /><strong>{t("initializingSearch")}</strong><span>{t("downloadingTranslation", { translation: translation?.translation ?? "" })}</span></div> : <>
+          {!searchQuery.trim() ? <p className="search-prompt">{t("searchPrompt")}</p> : searchError ? <div className="search-error" role="alert"><p>{searchError}</p><button type="button" onClick={() => restartSearch(searchQuery)}>Try search again</button></div> : searchLoading ? <div className="search-initializing"><i /><strong>{t("searching")}</strong><span>Searching {translation?.translation ?? "Scripture"}…</span></div> : <>
             <p className="search-count">{countMessage(searchResults.length, "resultLoaded", "resultsLoaded")} · {t(searchComplete ? "endOfResults" : "scrollForMore")}</p>
             {searchResults.length ? <ol>{searchResults.map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
               setSearchArrival({ book: result.book, chapter: result.chapter, verse: result.verse, query: searchQuery, match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang, token: Date.now() });
               setPendingVerse(result.verse);
-              go({ translation: route.translation, book: result.book, chapter: result.chapter }, false, result.bookName);
+              go({ translation: translation?.abbreviation || route.translation, book: result.book, chapter: result.chapter }, false, result.bookName);
               setSearchOpen(false);
             }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : searchRunning ? <div className="search-more"><i />{t("searching")}</div> : <p className="search-prompt">{t("noSearchResults")}</p>}
-            {searchRunning && searchResults.length ? <div className="search-more"><i />{t("loadingMoreResults")}</div> : null}
+            {searchRunning && searchResults.length ? <div className="search-more"><i />{t("loadingMoreResults")}</div> : !searchComplete && searchResults.length ? <button className="search-page-button" type="button" onClick={loadMoreSearchResults}>Load more results</button> : null}
           </>}
         </div>
       </section> : null}
@@ -1162,7 +1234,7 @@ export default function Home() {
             </> : <div className="sync-information">
               <p>{rich("syncParagraph1", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
               <p>{rich("syncParagraph2", { getBible: <a href="https://getbible.life/" target="_blank" rel="noreferrer">getBible</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
-              <p>{rich("syncParagraph3", { crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, hashRepository: <a href="https://git.vdm.dev/getBible/v2" target="_blank" rel="noreferrer">{t("officialHashRepository")}</a>, bibleApi: <a href="https://api.getbible.net" target="_blank" rel="noreferrer">{t("bibleApi")}</a>, translations: <a href="https://api.getbible.net/v2/translations.json" target="_blank" rel="noreferrer">{t("translationsLabel")}</a> })}</p>
+              <p>{rich("syncParagraph3", { crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, hashRepository: <a href="https://git.vdm.dev/getBible/v2" target="_blank" rel="noreferrer">{t("officialHashRepository")}</a>, bibleApi: <a href="https://api.getbible.net" target="_blank" rel="noreferrer">{t("bibleApi")}</a>, translations: <a href="https://api.getbible.net/v3/translations.json" target="_blank" rel="noreferrer">{t("translationsLabel")}</a> })}</p>
               <p>{rich("syncParagraph4", { bibleApi: <a href="https://api.getbible.net" target="_blank" rel="noreferrer">{t("bibleApi")}</a>, hashValues: <a href="https://getbible.life/docs#mapping-helpers" target="_blank" rel="noreferrer">{t("hashValues")}</a> })}</p>
               <p>{rich("syncParagraph5", { modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a>, crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a> })}</p>
               <p>{rich("syncParagraph6", { crossWire: <a href="https://wiki.crosswire.org/" target="_blank" rel="noreferrer">CrossWire</a>, getBible: <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">getBible</a>, modules: <a href="http://www.crosswire.org/sword/modules/ModDisp.jsp?modType=Bibles" target="_blank" rel="noreferrer">{t("modules")}</a> })}</p>
@@ -1333,6 +1405,12 @@ export default function Home() {
               <p className="cache-status">
                 {t(verified ? "contentHashVerified" : "showingSavedContent")}
               </p>
+              <div className="offline-tools">
+                <strong>Offline reading</strong>
+                <p>Save the entire translation in one download. Available dictionaries and commentaries can be saved from Study.</p>
+                <button type="button" disabled={offlineLoading || !translation} onClick={() => void downloadTranslation()}>{offlineLoading ? "Downloading translation…" : offlineAvailable ? "Check offline translation" : "Download translation"}</button>
+                <p role="status">{offlineMessage || (offlineAvailable ? "This translation is available offline." : "Read downloaded chapters without a connection.")}</p>
+              </div>
               <button
                 className="plain-action"
                 type="button"
@@ -1346,6 +1424,7 @@ export default function Home() {
 
         {drawer === "markings" ? (
           <div className="drawer-content markings-panel">
+            <button className="shared-bookmarks-button" type="button" onClick={() => { setDrawer(null); setSharedBookmarksOpen(true); }}>Browse shared bookmarks</button>
             <p className="drawer-help">
               {t("studyHelp")}
             </p>
@@ -1536,6 +1615,7 @@ export default function Home() {
               const touch = event.changedTouches[0];
               touchStart.current = null;
               if (!start || !touch) return;
+              if (window.getSelection() && !window.getSelection()?.isCollapsed) return;
               const horizontal = touch.clientX - start.x;
               const vertical = touch.clientY - start.y;
               if (Math.abs(horizontal) > 70 && Math.abs(horizontal) > Math.abs(vertical)) {
@@ -1569,6 +1649,16 @@ export default function Home() {
               <button type="button" aria-label={t("closeVerification")} onClick={() => setVerifiedInfo(false)}>×</button>
             </div> : null}
 
+            <div className="reader-tool-actions">
+              <button type="button" onClick={() => openStudy()}>Chapter commentary</button>
+              <button type="button" onClick={() => openStudy({ word: "" })}>Dictionary</button>
+              <button type="button" onClick={() => setSharedBookmarksOpen(true)}>Shared bookmarks</button>
+              <label><input type="checkbox" checked={annotationsEnabled} onChange={(event) => setAnnotationsEnabled(event.target.checked)} /> Study annotations</label>
+            </div>
+            {annotationsEnabled && (passage.introduction?.length || passage.titles?.length) ? <details className="chapter-source-introduction"><summary>About this chapter</summary>
+              {passage.titles?.map((title, index) => <p key={`title-${index}`}><strong>{title.text}</strong></p>)}
+              {passage.introduction?.map((entry, index) => <p key={index}>{entry.text}</p>)}
+            </details> : null}
             <ol className={`verses ${layout === "paragraph" ? "verses-paragraph" : "verses-lines"}`} data-layout={layout}>
               {passage.verses.map((verse) => {
                 const verseMarkings = currentMarkings.filter(
@@ -1586,7 +1676,7 @@ export default function Home() {
                   <li
                     id={`v${verse.verse}`}
                     key={verse.verse}
-                    className={`${wholeMarking ? "whole-marked " : ""}${arrival ? "search-arrival" : ""}`.trim()}
+                    className={`${wholeMarking ? "whole-marked " : ""}${arrival ? "search-arrival " : ""}${annotationsEnabled && isParagraphStart(passage, verse) ? "editorial-paragraph-start" : ""}`.trim()}
                     data-search-arrival={arrival?.token}
                     style={
                       wholeColor
@@ -1594,6 +1684,7 @@ export default function Home() {
                         : undefined
                     }
                   >
+                    {annotationsEnabled ? getVerseHeadings(passage, verse.verse).map((heading, index) => <div className="editorial-heading" key={index}>{heading.text}</div>) : null}
                     <button
                       className="verse-number"
                       type="button"
@@ -1614,29 +1705,10 @@ export default function Home() {
                         captureSelection(verse.verse, reference, event)
                       }
                     >
-                      {markedSegments(verse.text, verseMarkings).map((segment) => {
-                        const segmentColor = segment.colorId
-                          ? colorMap.get(segment.colorId)
-                          : null;
-                        const segmentContent = arrival
-                          ? highlightSearchText(segment.text, arrival.query, { match: arrival.match, caseSensitive: arrival.caseSensitive, locale: arrival.locale }).map((part, index) => part.highlighted
-                            ? <span className="search-arrival-word" key={`${segment.start}-${index}`}>{part.text}</span>
-                            : part.text)
-                          : segment.text;
-                        return segmentColor ? (
-                          <mark
-                            key={`${segment.start}-${segment.end}`}
-                            style={{ backgroundColor: segmentColor.value }}
-                          >
-                            {segmentContent}
-                          </mark>
-                        ) : (
-                          <span key={`${segment.start}-${segment.end}`}>
-                            {segmentContent}
-                          </span>
-                        );
-                      })}
+                      <ScriptureText verse={verse} markings={verseMarkings} colors={colorMap} search={arrival || undefined} enabled={annotationsEnabled}
+                        onWord={(word, _start, _end, strong) => openStudy({ verse: verse.verse, word, strong })} onReference={openReference} />
                     </span>
+                    {annotationsEnabled ? <VerseAnnotations verse={verse} onReference={openReference} /> : null}
                     {noteEditor && noteKey(noteEditor) === noteKey({ passage: route, verse: verse.verse }) ? <div className="inline-note-editor" role="dialog" aria-label={t("noteFor", { reference })}>
                       <div className="inline-note-editor-header">
                         <span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v13H9l-4 3V4Z"/><path d="M9 8h6M9 12h4"/></svg>{reference}</span>
@@ -1697,6 +1769,9 @@ export default function Home() {
             <span>{textSelection ? t("markQuote", { quote: `${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}` }) : t("markReference", { reference: wholeVerseSelection?.reference ?? "" })}</span>
           </span>
           <div className="selection-actions">
+            <button className="selection-study-action" type="button" onClick={() => { const text = textSelection?.text || wholeVerseSelection?.text || ""; closeSelectionToolbar(); restartSearch(text); }}>Search</button>
+            <button className="selection-study-action" type="button" onClick={() => openStudy({ verse: textSelection?.verse ?? wholeVerseSelection?.verse, word: textSelection?.text })}>Study</button>
+            <button className="selection-study-action" type="button" onClick={() => openReference(textSelection?.reference || wholeVerseSelection?.reference || "")}>Reference</button>
             {colorMap.get(activeColorId) ? <button className="selection-active-group" type="button" onClick={() => applySelectionColor(activeColorId)}>
               <i style={{ backgroundColor: colorMap.get(activeColorId)?.value }} />
               <span>{colorMap.get(activeColorId)?.name}</span>
@@ -1709,7 +1784,7 @@ export default function Home() {
                 {colors.filter((color) => color.id !== activeColorId).map((color) => <option value={color.id} key={color.id}>{color.name}</option>)}
               </select>
             </label>
-            {wholeVerseSelection ? <button className="selection-none" type="button" aria-label={t("removeWholeVerseColor", { reference: wholeVerseSelection.reference })} title={t("noWholeVerseColor")} onClick={() => {
+            {wholeVerseSelection ? <button className="selection-none" type="button" disabled={!personalWholeVerseMarking(currentMarkings.filter((marking) => marking.verse === wholeVerseSelection.verse))} aria-label="Clear personal highlight" title="Clear personal highlight; shared topic memberships stay saved" onClick={() => {
               setMarkings((current) => withoutWholeVerseMarking(current, route, wholeVerseSelection.verse));
               closeSelectionToolbar();
             }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m6.5 17.5 11-11"/></svg><span>{t("none")}</span></button> : null}

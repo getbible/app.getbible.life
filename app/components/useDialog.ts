@@ -9,7 +9,7 @@ export function useDialog(root: RefObject<HTMLElement | null>, onClose: () => vo
     const previous = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     const element = root.current;
     if (!element) return;
-    const focusable = () => Array.from(element.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),[tabindex="0"]')).filter((item) => item.getClientRects().length);
+    const focusable = () => Array.from(element.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),select:not(:disabled),textarea:not(:disabled),summary,[tabindex="0"]')).filter((item) => item.tabIndex >= 0 && item.getClientRects().length);
     const first = focusable()[0];
     first?.focus();
     const keydown = (event: KeyboardEvent) => {
