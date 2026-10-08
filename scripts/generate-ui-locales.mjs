@@ -3,7 +3,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { ENGLISH_UI_MESSAGES } from "../lib/i18n.ts";
 
-const TRANSLATIONS_URL = "https://api.getbible.net/v2/translations.json";
+const TRANSLATIONS_URL = "https://api.getbible.net/v3/translations.json";
 const BING_TRANSLATOR_URL = "https://www.bing.com/translator";
 const CONCURRENCY = 2;
 const MAX_CHUNK_LENGTH = 2_400;

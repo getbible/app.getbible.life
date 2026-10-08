@@ -1,6 +1,6 @@
 # getBible.Life
 
-A production-ready, browser-native Bible reader built with React 19, Next.js/Vinext, TypeScript, and the public [GetBible API v2](https://api.getbible.net/v2/translations.json).
+A production-ready, browser-native Bible reader built with React 19, Next.js/Vinext, TypeScript, and the public [GetBible API v3](https://getbible.net/api/bible/v3.md) and its study APIs.
 
 ## Features
 
@@ -22,33 +22,51 @@ A production-ready, browser-native Bible reader built with React 19, Next.js/Vin
 - A glasses button opens the current chapter as Markdown with an H1 chapter heading, valid ordered-list verses, Copy and Download `.md` actions, and the translation’s full name plus copyright/license notice in the footer.
 - A muted desktop-only end-of-chapter footer links the current passage to `getbible.life` and displays the dynamically current Vast Development Method copyright year.
 - The browser favicon is the replaceable 96×96 `public/favicon.png` asset.
-- Translation-wide local search with all-word, any-word, phrase, partial/exact word, case, testament, and book filters. The whole translation is downloaded once, cached against its upstream hash, and searched with Unicode-aware segmentation.
+- Translation-wide [Search v3](https://getbible.net/api/search/v3.md) with all-word, any-word, phrase, whole-word/substring, case, testament, book, accent, exclusion, proximity, and relevance filters. Search results use the API’s authoritative ordering and pagination.
 - Search results lock the underlying reader scroll and highlight every matching word using the active appearance palette.
 - Opening a search result centers its verse and temporarily emphasizes the verse and matched words for seven seconds.
-- Search is non-blocking and incremental: each edit restarts an ordered scan, the first 20 matches appear immediately, and further groups load as the result list is scrolled.
+- Search is debounced and cancellable; each edit starts a new API search. Pages contain 25 results, with scroll loading and an accessible Load more button. Translation hash changes require a new search.
 - Appearance can follow the operating system automatically or be switched manually; the selected light and dark palettes are preserved independently.
 - Browser Cache Storage for fast repeat visits and offline fallback.
-- Every opened chapter is checked against its `.sha` endpoint. Changed chapters are replaced immediately.
-- Translation, book, and chapter indexes refresh weekly. Changed upstream hashes invalidate only the affected cache branch.
+- Individual chapter downloads verify exact source bytes against their SHA-1. Complete translation downloads verify their own hash and serve chapters and navigation indexes directly for one week before revalidation.
+- Translation, book, and chapter indexes refresh weekly. Changed parent hashes expire the affected navigation indexes while retaining previously saved bodies for offline fallback.
 - The current translation license is displayed with the text.
 - Clickable translation credits with complete API metadata, licensing, source details, and version history.
 - Persistent reader layout switch between one verse per line and a continuous paragraph.
 - Sixty searchable starter marking groups with a compact large-list color picker and editable deployment colors.
 - Language-aware translation sorting with a CLDR-backed fallback when an API language name is absent.
 - Maintenance and CrossWire synchronization information available from the site footer.
-- The complete reader interface follows the selected Bible translation's language. Locale packs cover all 69 language identifiers currently exposed by the GetBible API, switch document direction for RTL languages, and preserve project names, scripture, API book names, and user-created study labels verbatim.
+- The established reader interface follows the selected Bible translation's language. Locale packs cover all 69 language identifiers currently exposed by the GetBible API, switch document direction for RTL languages, and preserve project names, scripture, API book names, and user-created study labels verbatim.
+
+- Source v3 tokens and spans add supplied-word italics, Jesus quotations, lexical details, source notes, and clickable references without changing verse text or saved selection offsets. Source headings and paragraph boundaries are optional.
+- Click a word for dictionaries and a search action; double-click, drag, and long-press selection remain available for personal highlights. Selected phrases also have Search, Study, and Reference actions.
+- Dictionaries use language and Strong’s identifiers to choose a default, remember resource preferences, and load exact indexed entries only as selected. Multiple definitions and related entries stay available.
+- Chapter and verse commentaries use published coverage lists, include book/chapter introductions, and link structured citations to a [Query v3](https://getbible.net/api/query/v3.md) modal without changing the reading position.
+- Shared bookmark topics can be browsed, localized, previewed, and merged into stable local marking groups without duplicate imports. Personal highlights take visual priority and do not erase topic memberships.
+- Explicit full-translation, dictionary, commentary, and bookmark-catalog downloads support offline reading. A versioned service worker preserves the reader shell, local fonts, and language packs after a successful online installation.
 
 ## API architecture
 
 | Resource | Endpoint |
 | --- | --- |
-| Translations | `/v2/translations.json` |
-| Translation books | `/v2/{translation}/books.json` |
-| Book chapters | `/v2/{translation}/{book}/chapters.json` |
-| Chapter | `/v2/{translation}/{book}/{chapter}.json` |
-| Chapter hash | `/v2/{translation}/{book}/{chapter}.sha` |
+| Translation index | `https://api.getbible.net/v3/translations.json` |
+| Translation books | `https://api.getbible.net/v3/{translation}/books.json` |
+| Book chapters | `https://api.getbible.net/v3/{translation}/{book}/chapters.json` |
+| Chapter / hash | `https://api.getbible.net/v3/{translation}/{book}/{chapter}.json` / `.sha` |
+| Complete translation / hash | `https://api.getbible.net/v3/{translation}.json` / `.sha` |
+| Scripture references | `https://query.getbible.net/v3/{translation}/{encoded-reference}` |
+| Paginated search | `https://search.getbible.net/v3/{translation}?q=…&limit=25&offset=…` |
+| Dictionary catalog / index / entry | `https://dictionaries.getbible.net/v1/dictionaries.json`, `/{dictionary}/index.json`, `/{dictionary}/{entry-id}.json` |
+| Commentary catalog / books / chapter | `https://commentaries.getbible.net/v1/commentaries.json`, `/{commentary}/books.json`, `/{commentary}/{book}/{chapter}.json` |
+| Shared bookmark topics / topic / complete catalog | `https://bookmarks.getbible.net/v1/topics.json`, `/topics/{topic}.json`, `/all.json` |
 
-The API's index resources contain child hashes. GetBible does not currently expose `.sha` files for `translations.json`, `books.json`, or `chapters.json`, so those indexes are refreshed weekly and their embedded hashes are compared. Individual chapters do expose `.sha` files and are verified whenever opened.
+The API clients are separated into `lib/cache.ts` (Bible resources), `lib/scripture-api.ts` (Query and Search), and `lib/study-api.ts` (dictionaries, commentaries, and public bookmarks). Verse rendering uses `lib/annotations.ts`; imported topic identity uses `lib/shared-bookmarks.ts`. Server search follows `matches`, not chapter-object iteration, and finds each returned verse by its emitted verse number. Reference queries encode the complete single/ranged/chained reference once. Numeric book references such as `43 3:16` remain usable across translation languages; supported OSIS references are normalized before query requests.
+
+Lexical source token text never replaces `verse.text`. Display-word positions are one-based inclusive, source-token indexes are zero-based inclusive, and unlocated source annotations remain outside selectable scripture. Personal character-offset markings therefore keep the same anchors.
+
+Dictionary entries are loaded by published index IDs, including duplicate occurrences. Commentaries use chapter files and `entry.verses ?? [entry.verse]`; chapter zero and verse zero provide introductions. Complete study downloads verify SHA-256 against the published manifest before replacing a saved module. Public bookmarks are read-only API collections; imports merge into the existing local system.
+
+Official contracts: [Bible v3](https://api.getbible.net/v3/openapi.json), [Query v3](https://query.getbible.net/v3/openapi.json), [Search v3](https://search.getbible.net/v3/openapi.json), [Dictionaries v1](https://dictionaries.getbible.net/v1/openapi.json), [Commentaries v1](https://commentaries.getbible.net/v1/openapi.json), [Bookmarks v1](https://bookmarks.getbible.net/v1/openapi.json), and the [documentation index](https://getbible.net/index.md).
 
 ## Requirements
 
@@ -83,7 +101,13 @@ The deployment script runs all tests, requires Wrangler authentication, and depl
 
 ## Cache behavior
 
-The application stores JSON responses in the browser Cache Storage API. Timestamps, SHA metadata, marking colors, saved markings, verse notes, daily Scripture, whole-translation search data, and the last visible verse are stored in durable browser storage, so annotations remain private to the current browser and device. The app requests persistent-storage protection when the browser supports it. If the API is temporarily unavailable, a previously cached chapter remains readable and is marked as saved rather than verified. **Clear all local data** requires confirmation and removes every locally stored reader item, including search indexes.
+Bible v3 data has an isolated cache namespace. Existing personal markings, notes, backups, colors, appearance, URLs, and reading positions keep their previous browser-storage formats. Dictionaries, commentaries, public catalogs, query previews, and the versioned shell use separate caches. Large resource bodies stay in Cache Storage, with bounded in-memory copies; localStorage holds small metadata and preferences.
+
+A complete translation is downloaded once and its chapters/indexes are read directly from that file. Complete dictionary and commentary downloads likewise supply entries and chapter coverage without per-entry downloads. Network requests have timeouts and cancellation; obsolete responses cannot replace a newer lookup. Storage failures keep online reading available and never claim a session-only download is saved offline. Previously cached content remains a fallback when a service is unavailable.
+
+Live search needs a connection. Downloaded resources and previously opened reference previews remain available offline. Query 404s, rate limits, and cancellations retain their actual errors instead of substituting a cached passage. The reader requests persistent storage where supported. **Clear all local data** confirms deletion and clears personal records, preferences, study downloads, reference caches, old Bible caches, and offline shell caches.
+
+Offline shell manifests are generated from the actual production assets after compilation. An update waits for existing reader tabs to close, keeping each release’s HTML and scripts together. Worker activation removes obsolete shell caches while preserving downloaded Bible and study resources. Fonts use portable asset URLs instead of paths from a developer’s checkout.
 
 ## Deployment marking groups
 

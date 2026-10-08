@@ -14,10 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "getBible.Life",
-  description: "Read, mark, and revisit Scripture with getBible.Life.",
-  other: {
-    "codex-preview": "development",
-  },
+  description: "Read, search, and study Scripture with dictionaries, commentaries, references, and offline Bible reading.",
   icons: {
     icon: { url: "/favicon.png", type: "image/png", sizes: "96x96" },
     shortcut: "/favicon.png",
