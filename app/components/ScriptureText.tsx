@@ -1,6 +1,6 @@
 "use client";
 
-import type { ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import type { Verse } from "../../lib/getbible";
 import type { Marking, MarkingColor } from "../../lib/markings";
 import type { MatchMode } from "../../lib/search";
@@ -8,6 +8,7 @@ import {
   annotationClasses, buildAnnotatedSegments, spanDetails, strongIdentifiers,
   tokenDetails, verseSourceAnnotations, type AnnotatedSegment,
 } from "../../lib/annotations";
+import { createWordActivation } from "../../lib/word-interactions";
 import "./scripture.css";
 
 export interface ScriptureTextProps {
@@ -22,6 +23,11 @@ export interface ScriptureTextProps {
 
 /** Place inside the existing .verse-text selection container. */
 export function ScriptureText({ verse, markings, colors, search, onWord, enabled = true }: ScriptureTextProps) {
+  const [wordActivation] = useState(() => createWordActivation(() => {
+    const selection = window.getSelection();
+    return Boolean(selection && !selection.isCollapsed);
+  }));
+  useEffect(() => () => wordActivation.cancel(), [wordActivation, verse.chapter, verse.verse, verse.name, verse.text]);
   const segments = buildAnnotatedSegments(verse, markings, search);
   const groups: AnnotatedSegment[][] = [];
   for (const segment of segments) {
@@ -55,17 +61,14 @@ export function ScriptureText({ verse, markings, colors, search, onWord, enabled
       role={onWord ? "button" : undefined}
       tabIndex={onWord ? 0 : undefined}
       aria-label={onWord ? `Study ${word.text}${strong.length ? ` (${strong.join(", ")})` : ""}` : undefined}
-      onClick={onWord ? () => {
-        // A word click must never consume the selection that opens the markings palette.
-        const selection = window.getSelection();
-        if (selection && !selection.isCollapsed) return;
-        activate();
-      } : undefined}
+      onClick={onWord ? (event) => wordActivation.click(event.detail, activate) : undefined}
+      onDoubleClick={onWord ? () => wordActivation.cancel() : undefined}
+      onBlur={onWord ? () => wordActivation.cancel() : undefined}
       onKeyDown={onWord ? (event) => {
         if (event.key !== "Enter" && event.key !== " ") return;
         event.preventDefault();
         event.stopPropagation();
-        activate();
+        wordActivation.keyboard(activate);
       } : undefined}
     >{content}</span>;
   });
