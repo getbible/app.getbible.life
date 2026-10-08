@@ -18,11 +18,15 @@ if [[ ! -x "${vinext}" ]]; then
   exit 69
 fi
 
+node "${script_dir}/generate-offline.mjs" --normalize-font-cache "${SITES_PROJECT_ROOT}"
+
 echo "Running bounded vinext build..."
 timeout \
   --signal=TERM \
   --kill-after="${SITES_BUILD_KILL_AFTER:-10s}" \
   "${SITES_BUILD_TIMEOUT:-3m}" \
   "${vinext}" build
+
+node "${script_dir}/generate-offline.mjs" "${SITES_PROJECT_ROOT}/dist/client"
 
 "${script_dir}/validate-artifact.sh"
