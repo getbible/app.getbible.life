@@ -38,6 +38,7 @@ function workerHarness() {
         return {
           async put(request: Request | string, response: Response) { store.set(cacheKey(request), response.clone()); },
           async match(request: Request | string) { return store.get(cacheKey(request))?.clone(); },
+          async keys() { return [...store.keys()].map(path=>new Request(new URL(path,origin))); },
         };
       },
       async keys() { return [...stores.keys()]; },
@@ -63,6 +64,13 @@ function workerHarness() {
       let work: Promise<void> | undefined;
       handlers.get(name)!({ waitUntil(promise: Promise<void>) { work = promise; } });
       await work;
+    },
+    async readiness() {
+      let work:Promise<void>|undefined;
+      let result:{ready:boolean;version:string}|undefined;
+      handlers.get("message")!({data:{type:"getbible-offline-ready"},ports:[{postMessage(value:{ready:boolean;version:string}) {result=value;}}],waitUntil(promise:Promise<void>) {work=promise;}});
+      await work;
+      return result;
     },
     async request(path: string, options: { navigate?: boolean; method?: string; headers?: HeadersInit } = {}) {
       const request = new Request(new URL(path, origin), { method: options.method || "GET", headers: options.headers });
@@ -127,6 +135,17 @@ test("installs the complete shell then reads chapters and assets after connectio
   const response = await worker.request("/KJV/John/3", { navigate: true });
   assert.equal(await response?.text(), shell);
   assert.equal(await (await worker.request("/assets/reader-old.js"))?.text(), "Asset /assets/reader-old.js");
+});
+
+test("offline readiness reports incomplete or evicted interface assets",async()=>{
+  const worker=workerHarness();
+  assert.equal((await worker.readiness())?.ready,false);
+  await worker.lifecycle("install");
+  const ready=await worker.readiness();
+  assert.equal(ready?.ready,true);
+  assert.equal(ready?.version,version);
+  worker.stores.get(cacheName)!.delete("/assets/reader-old.js");
+  assert.equal((await worker.readiness())?.ready,false);
 });
 
 test("failed installation keeps previous reader and data caches", async () => {

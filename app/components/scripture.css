@@ -34,11 +34,27 @@
   outline-offset: 3px;
 }
 
-.scripture-word-action:hover {
+.verse-text mark.scripture-mark {
+  /* Keep any chosen bookmark color readable in every reader palette. */
+  background-color: color-mix(in srgb, var(--marking-color) 28%, var(--background));
+  color: inherit;
+}
+
+.scripture-word-action:hover,
+.scripture-word-action:hover span,
+.scripture-word-action:hover mark {
   text-decoration-line: underline;
-  text-decoration-color: var(--border);
+  text-decoration-color: color-mix(in srgb, currentColor 55%, transparent);
   text-decoration-thickness: 1px;
   text-underline-offset: 0.2em;
+}
+
+.whole-marked .scripture-word-action:hover,
+.whole-marked .scripture-word-action:hover span,
+.scripture-word-action:hover mark,
+.scripture-word-action:hover mark span {
+  /* Decorate inside marks as well: their backgrounds can cover a parent line. */
+  text-decoration-color: color-mix(in srgb, currentColor 70%, var(--marking-color, currentColor));
 }
 
 .verse-source-notes {

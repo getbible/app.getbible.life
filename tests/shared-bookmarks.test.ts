@@ -11,7 +11,7 @@ const topic = {
 
 test("shared topics import one stable group and deduplicated whole-verse markings", () => {
   const imported = importBookmarkTopic(topic, "KJV", "af", 123);
-  assert.deepEqual(imported.colors, [{ id: "getbible-topic:authority-of-the-bible", name: "Gesag van die Bybel", value: "#93c5fd" }]);
+  assert.deepEqual(imported.colors, [{ id: "getbible-topic:authority-of-the-bible", name: "Gesag van die Bybel", value: "#93c5fd", source: { type: "shared-bookmark", topicId: topic.id } }]);
   assert.equal(imported.markings.length, 2);
   assert.equal(imported.markings[0].id, "getbible-topic:authority-of-the-bible:2:20:14");
   assert.deepEqual(imported.markings[0].passage, { translation: "kjv", book: 2, chapter: 20 });
@@ -113,6 +113,9 @@ test("portable backups retain shared origin and earlier deterministic imports re
   assert.equal(isSharedBookmarkMarking({ ...legacy, id: "personal-id" }), false);
   const invalidSource = { ...backup, markings: [{ ...imported.markings[0], source: { type: "shared-bookmark", topicId: "../bad" } }] };
   assert.throws(() => parseMarkingsBackup(invalidSource), /invalid data/);
-  assert.throws(() => parseMarkingsBackup({ ...backup, markings: [{ ...imported.markings[0], colorId: "unrelated" }] }), /invalid data/);
+  const migrated = { ...backup, colors: [{ ...imported.colors[0], id: "original-local-group" }], markings: [{ ...imported.markings[0], colorId: "original-local-group" }] };
+  assert.deepEqual(parseMarkingsBackup(migrated), migrated);
+  assert.equal(isSharedBookmarkMarking(migrated.markings[0]), true);
+  assert.throws(() => parseMarkingsBackup({ ...backup, colors: [{ ...imported.colors[0], source: { type: "shared-bookmark", topicId: "../bad" } }] }), /invalid data/);
 });
 

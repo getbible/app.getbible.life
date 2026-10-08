@@ -1,0 +1,23 @@
+.infrastructure-credit {
+  margin-top: 26px;
+  padding-top: 13px;
+  border-top: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.7;
+}
+.infrastructure-credit p { margin: 0; }
+.infrastructure-credit a {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: inherit;
+  text-decoration: underline;
+  text-decoration-color: var(--border);
+  text-underline-offset: 3px;
+  white-space: nowrap;
+  vertical-align: middle;
+}
+.infrastructure-credit a:hover { color: var(--foreground); text-decoration-color: currentColor; }
+.infrastructure-credit a:focus-visible { outline: 2px solid var(--foreground); outline-offset: 4px; border-radius: 2px; }
+.infrastructure-credit img { flex: none; }

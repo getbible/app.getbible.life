@@ -11,11 +11,46 @@ export interface DailyReference {
   bookName: string;
   chapter: number;
   verse: number;
+  /** All selected verse numbers in this chapter, including ranges in the feed. */
+  verses: number[];
 }
+
+export type DailyPassage = Passage & { bookName: string; verse: number; verses: number[] };
 
 function positiveNumber(value: unknown): number | null {
   const number = Number(String(value ?? "").match(/\d+/)?.[0]);
   return Number.isSafeInteger(number) && number > 0 ? number : null;
+}
+
+/** The daily reader opens one chapter; ignore explicitly different chapter coordinates. */
+function verseNumbers(value: unknown, chapter: number): number[] {
+  if (Array.isArray(value)) return value.flatMap((item) => verseNumbers(item, chapter));
+  if (typeof value !== "string" && typeof value !== "number") return [];
+  const parts = String(value).trim().replace(/\s*([-\u2013\u2014:])\s*/g, "$1").split(/[,;\s]+/);
+  let selectedChapter = chapter;
+  return parts.flatMap((part) => {
+    const match = part.match(/^(?:(\d+):)?(\d+)(?:[-\u2013\u2014](\d+))?$/);
+    if (!match) return [];
+    if (match[1]) selectedChapter = Number(match[1]);
+    if (selectedChapter !== chapter) return [];
+    const first = Number(match[2]);
+    const last = Number(match[3] ?? match[2]);
+    // Bound range expansion to avoid malformed external data blocking the reader.
+    if (!Number.isSafeInteger(first) || !Number.isSafeInteger(last) || first < 1 || last < first || last - first > 1_000) return [];
+    return Array.from({ length: last - first + 1 }, (_, index) => first + index);
+  });
+}
+
+/** Keep long daily readings inside the Query API's reference-length budget. */
+function verseSelection(verses: number[]): string {
+  const selections: string[] = [];
+  for (let index = 0; index < verses.length; index++) {
+    const first = verses[index];
+    while (index + 1 < verses.length && verses[index + 1] === verses[index] + 1) index++;
+    const last = verses[index];
+    selections.push(first === last ? String(first) : `${first}-${last}`);
+  }
+  return selections.join(",");
 }
 
 export function localDateKey(date: Date): string {
@@ -41,16 +76,20 @@ export function parseDailyReference(value: unknown): DailyReference {
   const urlParts = link.split("/").filter(Boolean);
   const getBibleIndex = urlParts.findIndex((part) => part.toLowerCase().includes("getbible.life"));
   const path = getBibleIndex >= 0 ? urlParts.slice(getBibleIndex + 1) : [];
-  const referenceMatch = name.match(/^(.+?)\s+(\d+):(\d+)/);
-  const scripture = Array.isArray(data.scripture) ? data.scripture as Array<Record<string, unknown>> : [];
+  const referenceMatch = name.match(/^(.+?)\s+(\d+)\s*:\s*(.+)/);
+  const scripture = Array.isArray(data.scripture) ? data.scripture.filter((item): item is Record<string, unknown> =>
+    item !== null && typeof item === "object" && !Array.isArray(item)) : [];
 
   const translation = String(data.translation ?? data.version ?? path[0] ?? "kjv").toLowerCase();
   const bookName = String(data.book ?? path[1] ?? referenceMatch?.[1] ?? "").replaceAll("%20", " ");
   const chapter = positiveNumber(data.chapter ?? path[2] ?? referenceMatch?.[2]);
-  const verse = positiveNumber(data.verse ?? data.verses ?? path[3] ?? referenceMatch?.[3] ?? scripture[0]?.nr);
-
-  if (!date || !bookName || !chapter || !verse) throw new Error("The daily Scripture response does not contain a complete reference.");
-  return { date, translation, bookName, chapter, verse };
+  if (!date || !bookName || !chapter) throw new Error("The daily Scripture response does not contain a complete reference.");
+  const selected = [data.verse, data.verses, path[3], referenceMatch?.[3]].flatMap((value) => verseNumbers(value, chapter));
+  selected.push(...scripture.flatMap((item) => positiveNumber(item.chapter ?? item.chapter_nr ?? chapter) === chapter ? verseNumbers(item.nr, chapter) : []));
+  const verse = selected[0];
+  if (!verse) throw new Error("The daily Scripture response does not contain a complete reference.");
+  const verses = [...new Set(selected)].sort((first, second) => first - second);
+  return { date, translation, bookName, chapter, verse, verses };
 }
 
 type DailyStorage = Pick<Storage, "getItem" | "setItem">;
@@ -89,14 +128,15 @@ export async function resolveDailyPassage(
   reference: DailyReference,
   books: Book[],
   query: (reference: string) => Promise<Chapter[]>,
-): Promise<Passage & { bookName: string; verse: number }> {
+): Promise<DailyPassage> {
+  const verses = [...new Set([reference.verse, ...reference.verses])].sort((first, second) => first - second);
   let book = books.find((item) => bookMatchesSlug(item.name, reference.bookName));
   if (!book) {
-    const chapters = await query(`${reference.bookName} ${reference.chapter}:${reference.verse}`);
+    const chapters = await query(`${reference.bookName} ${reference.chapter}:${verseSelection(verses)}`);
     const chapter = chapters.find((item) => item.abbreviation === DEFAULT_TRANSLATION &&
-      item.chapter === reference.chapter && item.verses.some((verse) => verse.verse === reference.verse));
+      item.chapter === reference.chapter && verses.every((number) => item.verses.some((verse) => verse.verse === number)));
     book = books.find((item) => item.nr === chapter?.book_nr);
   }
   if (!book) throw new Error(`The daily Scripture book “${reference.bookName}” is unavailable.`);
-  return { translation: DEFAULT_TRANSLATION, book: book.nr, bookName: book.name, chapter: reference.chapter, verse: reference.verse };
+  return { translation: DEFAULT_TRANSLATION, book: book.nr, bookName: book.name, chapter: reference.chapter, verse: reference.verse, verses };
 }

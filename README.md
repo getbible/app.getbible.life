@@ -101,17 +101,19 @@ The deployment script runs all tests, requires Wrangler authentication, and depl
 
 ## Cache behavior
 
-Bible v3 data has an isolated cache namespace. Existing personal markings, notes, backups, colors, appearance, URLs, and reading positions keep their previous browser-storage formats. Dictionaries, commentaries, public catalogs, query previews, and the versioned shell use separate caches. Large resource bodies stay in Cache Storage, with bounded in-memory copies; localStorage holds small metadata and preferences.
+Bible v3 data has an isolated cache namespace. Existing personal markings, notes, backups, colors, appearance, URLs, and reading positions are retained; legacy bookmark groups can migrate into the unified topic snapshot. Dictionaries, commentaries, public catalogs, query previews, and the versioned shell use separate caches. Large resource bodies stay in Cache Storage, with bounded in-memory copies; localStorage holds small metadata and preferences.
 
-A complete translation is downloaded once and its chapters/indexes are read directly from that file. Complete dictionary and commentary downloads likewise supply entries and chapter coverage without per-entry downloads. Network requests have timeouts and cancellation; obsolete responses cannot replace a newer lookup. Storage failures keep online reading available and never claim a session-only download is saved offline. Previously cached content remains a fallback when a service is unavailable.
+A complete translation is downloaded once and its chapters/indexes are read directly from that file. Downloaded corpora also supply startup translation metadata if the separate catalog or local metadata has been evicted. Known offline reads use saved content immediately without waiting for network hash checks. Complete dictionary and commentary downloads likewise supply entries and chapter coverage without per-entry downloads. Network requests have timeouts and cancellation; obsolete responses cannot replace a newer lookup. Storage failures keep online reading available and never claim a session-only download is saved offline. Previously cached content remains a fallback when a service is unavailable.
 
 Live search needs a connection. Downloaded resources and previously opened reference previews remain available offline. Query 404s, rate limits, and cancellations retain their actual errors instead of substituting a cached passage. The reader requests persistent storage where supported. **Clear all local data** confirms deletion and clears personal records, preferences, study downloads, reference caches, old Bible caches, and offline shell caches.
 
-Offline shell manifests are generated from the actual production assets after compilation. An update waits for existing reader tabs to close, keeping each release’s HTML and scripts together. Worker activation removes obsolete shell caches while preserving downloaded Bible and study resources. Fonts use portable asset URLs instead of paths from a developer’s checkout.
+Offline shell manifests are generated from the actual production assets after compilation. An update waits for existing reader tabs to close, keeping each release’s HTML and scripts together. Worker activation removes obsolete shell caches while preserving downloaded Bible and study resources. Fonts use portable asset URLs instead of paths from a developer’s checkout. Offline download confirmation requires the worker to confirm every interface asset is saved; a missing shell is reported separately from saved translation data.
 
-## Deployment marking groups
+## Bookmark topics
 
-Edit `config/reader.ts` to choose the initial marking names and colors for a deployment. Browser-customized color lists are preserved across deployments; the configured list is used for new installations or after local site data is cleared. The Markings drawer provides bounded scrolling and search when the configured list grows.
+Built-in bookmark topics come from the getBible Bookmarks API. New readers start with the global topics, and can download all global bookmarks or one topic at a time in the same list used for personal bookmarks. Existing readers are offered a migration that merges matching names, aliases and localized topics while preserving custom topics and personal data. Downloaded entries carry a G badge and can be removed without deleting personal bookmarks. Topic names and colors remain editable, and backups preserve global provenance. Browser storage saves topics and bookmarks together as one atomic snapshot.
+
+The translated Verified explanation links to the Bible API documentation, and translation information includes a small linked getBible infrastructure credit. Jesus speaker metadata supplies red text without a redundant speaker annotation; other source metadata remains visible.
 
 ## Interface localization
 
