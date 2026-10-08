@@ -1,0 +1,139 @@
+.verse-text {
+  white-space: pre-wrap;
+}
+
+.scripture-supplied,
+.scripture-italic {
+  font-style: italic;
+}
+
+.scripture-bold {
+  font-weight: 700;
+}
+
+.scripture-jesus {
+  color: #9d302d;
+}
+
+[data-theme="dark"] .scripture-jesus {
+  color: #eda9a0;
+}
+
+.scripture-divine-name {
+  font-variant-caps: small-caps;
+}
+
+.scripture-word-action {
+  cursor: text;
+  border-radius: 2px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.scripture-word-action:focus-visible {
+  outline: 2px solid var(--accent, #987149);
+  outline-offset: 3px;
+}
+
+.scripture-word-action:hover {
+  text-decoration-line: underline;
+  text-decoration-color: var(--border);
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+}
+
+.verse-source-notes {
+  margin: 5px 0;
+  color: var(--muted);
+  font-family: var(--font-geist-sans), Arial, sans-serif;
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.55;
+}
+
+.verse-source-notes summary {
+  width: fit-content;
+  cursor: pointer;
+  font-size: 10px;
+  list-style-position: inside;
+}
+
+.verse-source-notes[open] {
+  padding: 6px 10px;
+  border-inline-start: 2px solid var(--border);
+  background: var(--subtle);
+}
+
+.verse-source-notes ul {
+  margin: 6px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.verse-source-notes li + li {
+  margin-top: 8px;
+}
+
+.verse-source-notes strong {
+  color: var(--foreground);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.verse-source-notes p {
+  margin: 3px 0;
+  white-space: pre-wrap;
+}
+
+.verse-source-details {
+  font-size: 10px;
+}
+
+.verse-source-notes button {
+  margin: 3px 6px 0 0;
+  padding: 2px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font: inherit;
+  font-size: 10px;
+}
+
+.verse-source-notes button:focus-visible,
+.verse-source-notes summary:focus-visible {
+  outline: 2px solid var(--accent, #987149);
+  outline-offset: 2px;
+}
+
+.verse-source-reference {
+  display: inline-block;
+  margin-inline-end: 6px;
+  font-size: 10px;
+}
+
+.verses-paragraph .verse-source-notes {
+  display: inline-block;
+  margin-inline-start: 6px;
+  vertical-align: middle;
+}
+
+.verses-paragraph .verse-source-notes[open] {
+  display: block;
+}
+
+.scripture-editorial-heading {
+  display: block;
+  margin: 1.1em 0 0.55em;
+  color: var(--muted);
+  font-family: var(--font-geist-sans), Arial, sans-serif;
+  font-size: 0.55em;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.verses-paragraph .source-paragraph-start::before {
+  display: block;
+  height: 0.7em;
+  content: "";
+}
