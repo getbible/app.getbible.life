@@ -41,9 +41,11 @@ export function StudyPanel(props: StudyPanelProps) {
 export default StudyPanel;
 
 function CitationText({ text, references, onReference }: { text: string; references?: ScriptureReference[]; onReference: (reference: string) => void }) {
-  const unlocated = (references ?? []).filter((reference) => !reference.text || !text.includes(reference.text));
+  const segments = studyTextSegments(text, references);
+  const linked = new Set(segments.map((segment) => segment.reference));
+  const unlocated = (references ?? []).filter((reference) => !linked.has(reference));
   return <>
-    <div className="study-prose">{studyTextSegments(text, references).map((segment, index) => segment.reference && segment.reference.chapter > 0
+    <div className="study-prose">{segments.map((segment, index) => segment.reference && segment.reference.chapter > 0
       ? <button className="study-reference" type="button" key={index} onClick={() => onReference(scriptureReferenceQuery(segment.reference!))} title={`Read ${segment.reference.ref}`}>{segment.text}</button>
       : <span key={index}>{segment.text}</span>)}</div>
     {unlocated.length ? <div className="study-citations" aria-label="Scripture references">{unlocated.filter((reference) => reference.chapter > 0).map((reference, index) => <button type="button" key={`${reference.ref}/${index}`} onClick={() => onReference(scriptureReferenceQuery(reference))}>{reference.ref}</button>)}</div> : null}
