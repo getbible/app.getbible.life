@@ -24,7 +24,7 @@
 }
 
 .scripture-word-action {
-  cursor: text;
+  cursor: pointer;
   border-radius: 2px;
   -webkit-tap-highlight-color: transparent;
 }
