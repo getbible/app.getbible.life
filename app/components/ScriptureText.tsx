@@ -15,7 +15,7 @@ export interface ScriptureTextProps {
   verse: Verse;
   markings: Marking[];
   colors: Map<string, MarkingColor>;
-  search?: { query: string; match: MatchMode; caseSensitive: boolean; locale?: string };
+  search?: { diacritics?: "fold" | "exact"; query: string; match: MatchMode; caseSensitive: boolean; locale?: string };
   onWord?: (word: string, start: number, end: number, strong: string[]) => void;
   onReference?: (reference: string) => void;
   enabled?: boolean;

@@ -23,6 +23,7 @@ export interface SearchOptions {
 }
 
 export interface HighlightSegment { text: string; highlighted: boolean }
+export type SearchHighlightOptions = Pick<SearchOptions, "match" | "caseSensitive" | "locale"> & { diacritics?: "fold" | "exact" };
 export interface SearchPage { results: SearchVerse[]; nextCursor: number; complete: boolean }
 
 export function flattenTranslation(translation: WholeTranslation): SearchVerse[] {
@@ -120,30 +121,27 @@ export function searchVerses(corpus: SearchVerse[], rawQuery: string, options: S
 export function highlightSearchText(
   text: string,
   rawQuery: string,
-  options: Pick<SearchOptions, "match" | "caseSensitive" | "locale">,
+  options: SearchHighlightOptions,
 ): HighlightSegment[] {
   const locale = options.locale || "und";
-  const normalize = (value: string) => options.caseSensitive ? value.normalize("NFC") : value.normalize("NFC").toLocaleLowerCase(locale);
+  const normalize = (value: string) => {
+    const normalized = options.diacritics === "fold"
+      ? value.normalize("NFD").replace(/\p{M}/gu, "").normalize("NFC")
+      : value.normalize("NFC");
+    return options.caseSensitive ? normalized : normalized.toLocaleLowerCase(locale);
+  };
   const terms = words(normalize(rawQuery), locale);
   if (!terms.length) return [{ text, highlighted: false }];
   const segmenter = typeof Intl.Segmenter === "function" ? new Intl.Segmenter(locale, { granularity: "word" }) : null;
-  if (!segmenter) {
-    const escaped = terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"));
-    const expression = new RegExp(escaped.join("|"), options.caseSensitive ? "gu" : "giu");
-    const result: HighlightSegment[] = [];
-    let start = 0;
-    for (const match of text.matchAll(expression)) {
-      const index = match.index ?? 0;
-      if (index > start) result.push({ text: text.slice(start, index), highlighted: false });
-      result.push({ text: match[0], highlighted: true });
-      start = index + match[0].length;
-    }
-    if (start < text.length) result.push({ text: text.slice(start), highlighted: false });
-    return result.length ? result : [{ text, highlighted: false }];
-  }
+  // Segment the original text and normalize comparisons only. Folded Unicode
+  // can have a different length; slicing it would shift annotation offsets or
+  // separate a combining mark from its highlighted word.
+  const parts = segmenter ? segmenter.segment(text) : Array.from(text.matchAll(/[\p{L}\p{N}\p{M}]+/gu), (part) => ({
+    segment: part[0], index: part.index!, isWordLike: true,
+  }));
   const result: HighlightSegment[] = [];
   let cursor = 0;
-  for (const part of segmenter.segment(text)) {
+  for (const part of parts) {
     if (!part.isWordLike) continue;
     if (part.index > cursor) result.push({ text: text.slice(cursor, part.index), highlighted: false });
     const token = normalize(part.segment);

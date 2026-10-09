@@ -7,17 +7,12 @@
 .reference-content { padding:20px; overflow:auto; overscroll-behavior:contain; }
 .reference-content p { line-height:1.75; }
 .reference-content sup { color:var(--muted); }
-.reference-content button,.reader-tool-actions button,.offline-tools button { background:var(--subtle); color:var(--foreground); border:1px solid var(--border); border-radius:6px; padding:8px 12px; cursor:pointer; }
+.reference-content button,.reader-tool-actions button { background:var(--subtle); color:var(--foreground); border:1px solid var(--border); border-radius:6px; padding:8px 12px; cursor:pointer; }
 .reader-tool-actions { display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin:24px 0 8px; padding:16px 0 0; border-top:1px solid var(--border); font:.8rem/1.5 var(--font-geist-sans),Arial,sans-serif; }
 .reader-tool-actions button { min-height:40px; }
 .reader-tool-actions button:focus-visible,.reader-tool-actions input:focus-visible { outline:2px solid var(--foreground); outline-offset:3px; }
 .reader-tool-actions label { display:flex; align-items:center; gap:7px; min-height:40px; color:var(--muted); cursor:pointer; }
 .reader-tool-actions input { cursor:pointer; }
-.offline-tools { padding:12px 0; display:grid; gap:9px; border-top:1px solid var(--border); }
-.offline-tools p { margin:0; font-size:.82rem; line-height:1.5; color:var(--muted); }
-.search-advanced { display:flex; flex-wrap:wrap; gap:10px; padding:8px 20px; border-bottom:1px solid var(--border); font-size:.8rem; }
-.search-advanced label { display:flex; align-items:center; gap:5px; }
-.search-advanced input,.search-advanced select { min-width:0; max-width:170px; color:var(--foreground); background:var(--background); border:1px solid var(--border); padding:5px; border-radius:4px; }
 .search-page-button { display:block; margin:14px auto; background:var(--subtle); color:var(--foreground); border:1px solid var(--border); border-radius:6px; padding:8px 14px; }
 .verses .editorial-heading { width:100%; display:block; background:transparent; font-size:.9em; font-family:var(--font-geist-sans),Arial,sans-serif; font-weight:600; margin:1em 0 .55em; padding:0; color:var(--muted); }
 .verses-paragraph .editorial-paragraph-start::before { display:block; height:.75em; content:""; }

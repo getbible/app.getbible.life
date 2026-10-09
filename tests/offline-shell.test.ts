@@ -20,6 +20,8 @@ function workerHarness() {
   let onlineShell = shell;
   let failedPath = "";
   let denyStorage = false;
+  let activated = false;
+  let claimed = false;
   const requests: Request[] = [];
   const cacheKey = (request: Request | string) => new URL(typeof request === "string" ? request : request.url, origin).pathname;
   const sandbox = {
@@ -27,9 +29,11 @@ function workerHarness() {
       location: { origin },
       __GETBIBLE_OFFLINE__: { version, assets: ["/", "/assets/reader-old.js", "/assets/reader.css", "/locales/en.json", "/favicon.png"] },
       addEventListener: (name: string, callback: (event: unknown) => void) => { handlers.set(name, callback); },
+      skipWaiting: async () => { activated = true; },
+      clients: { claim: async () => { claimed = true; } },
     },
     importScripts: () => undefined,
-    URL, Request, Response, AbortController, setTimeout, clearTimeout,
+    URL, Request, Response, Headers, AbortController, setTimeout, clearTimeout,
     caches: {
       async open(name: string) {
         if (denyStorage) throw new Error("Storage disabled");
@@ -56,6 +60,8 @@ function workerHarness() {
   vm.runInNewContext(workerSource, sandbox);
   return {
     stores, requests,
+    get activated() { return activated; },
+    get claimed() { return claimed; },
     setOffline(value: boolean) { offline = value; },
     setOnlineShell(value: string) { onlineShell = value; },
     failAsset(path: string) { failedPath = path; },
@@ -130,6 +136,7 @@ test("installs the complete shell then reads chapters and assets after connectio
   const worker = workerHarness();
   await worker.lifecycle("install");
   assert.equal(worker.stores.get(cacheName)?.size, 5);
+  assert.equal(worker.activated, true);
   assert.ok(worker.requests.every((request) => request.cache === "reload"));
   worker.setOffline(true);
   const response = await worker.request("/KJV/John/3", { navigate: true });
@@ -157,6 +164,7 @@ test("failed installation keeps previous reader and data caches", async () => {
   assert.equal(worker.stores.has(cacheName), false);
   assert.equal(worker.stores.has("getbible-shell-previous"), true);
   assert.equal(worker.stores.has("getbible-reader:v3"), true);
+  assert.equal(worker.activated, false);
 });
 
 test("activation removes old shells while preserving translations and study resources", async () => {
@@ -167,6 +175,23 @@ test("activation removes old shells while preserving translations and study reso
   worker.stores.set("getbible-study:v1", new Map());
   await worker.lifecycle("activate");
   assert.deepEqual([...worker.stores.keys()], [cacheName, "getbible-reader:v3", "getbible-study:v1"]);
+  assert.equal(worker.claimed, true);
+});
+
+test("an installed update serves its new shell and retains older tabs' compiled assets for thirty days", async () => {
+  const worker = workerHarness();
+  await worker.lifecycle("install");
+  worker.stores.set("getbible-shell-previous", new Map([
+    ["/", htmlResponse('<script src="/assets/previous.js"></script>')],
+    ["/assets/previous.js", new Response("previous compiled chunk")],
+  ]));
+  worker.stores.set("getbible-shell-expired", new Map([["/", new Response("expired shell", { headers: { "x-getbible-cached-at": String(Date.now() - 31 * 24 * 60 * 60 * 1_000) } })]]));
+  await worker.lifecycle("activate");
+  assert.equal(worker.stores.has("getbible-shell-expired"), false);
+  assert.ok(Number(worker.stores.get("getbible-shell-previous")?.get("/")?.headers.get("x-getbible-cached-at")) > 0);
+  worker.setOffline(true);
+  assert.equal(await (await worker.request("/KJV/John/3", { navigate: true }))?.text(), shell);
+  assert.equal(await (await worker.request("/assets/previous.js"))?.text(), "previous compiled chunk");
 });
 
 test("a new release's online HTML never overwrites an older worker's offline shell", async () => {
@@ -196,7 +221,6 @@ test("external APIs, writes, authentication, range and unknown routes are never 
   for (const [path, options] of [
     ["https://api.getbible.net/v3/kjv.json", {}],
     ["/api/private", {}],
-    ["/assets/unlisted.js", {}],
     ["/assets/reader-old.js", { method: "POST" }],
     ["/assets/reader-old.js", { headers: { authorization: "Bearer example" } }],
     ["/assets/reader-old.js", { headers: { range: "bytes=0-9" } }],
@@ -205,6 +229,12 @@ test("external APIs, writes, authentication, range and unknown routes are never 
     assert.equal(await worker.request(path, options), undefined);
   }
   assert.equal(worker.requests.length, 0);
+});
+
+test("unknown compiled assets use the network without entering the current release cache", async () => {
+  const worker=workerHarness();
+  assert.equal(await (await worker.request("/assets/unlisted.js"))?.text(), "Asset /assets/unlisted.js");
+  assert.equal(worker.stores.get(cacheName)?.has("/assets/unlisted.js"), false);
 });
 
 test("storage denial still allows online navigation and asset responses", async () => {

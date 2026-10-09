@@ -21,6 +21,7 @@ export interface EditorialChapter {
 }
 
 export interface AnnotationSearch {
+  diacritics?: "fold" | "exact";
   query: string;
   match: MatchMode;
   caseSensitive: boolean;

@@ -33,8 +33,6 @@ import {
   chapter as loadChapter,
   chapters as loadChapters,
   clearCache,
-  fullTranslation as loadFullTranslation,
-  fullTranslationAvailable,
   translations as loadTranslations,
 } from "../lib/cache";
 import {
@@ -52,20 +50,23 @@ import {
   isSharedBookmarkMarking,
 } from "../lib/markings";
 import { readBookmarkState, writeBookmarkState } from "../lib/bookmark-storage";
-import { prepareOfflineReader } from "../lib/offline-ready";
 import { DEFAULT_TRANSLATION, loadDailyReference, resolveDailyPassage } from "../lib/daily";
 import { type VerseNote, compareNotes, mergeNotes, noteKey, noteMatchesPassage } from "../lib/notes";
 import { boundaryIntent, boundaryTurn, type BoundaryIntent, readerLayout, type ReaderLayout, normalizeReadingWidth, type ReadingWidth, readerStorageKeys } from "../lib/reader-state";
 import { DARK_PALETTES, LIGHT_PALETTES, READER_FONTS, validPalette } from "../lib/appearance";
-import { highlightSearchText, SEARCH_ARRIVAL_MS, type MatchMode, type SearchScope, type SearchVerse, type WordMode } from "../lib/search";
+import { SEARCH_ARRIVAL_MS, type MatchMode, type SearchScope, type WordMode } from "../lib/search";
+import { deferLoading } from "../lib/deferred-loading";
 import { chapterMarkdown, chapterMarkdownFilename } from "../lib/markdown";
 import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from "../lib/i18n";
 import { floatingToolbarPosition, type FloatingRect, type FloatingToolbarPosition } from "../lib/floating-toolbar";
 
 import { clearStudyCache, getDictionaryCatalog, getBookmarkAll, getBookmarkTopic, downloadBookmarkCatalog, type BookmarkAll } from "../lib/study-api";
 import { bookmarkDefaultColors, migrateBookmarkGroups, importBookmarkCatalog, importBookmarkTopicIntoGroups, removeGlobalBookmarkMarkings, type BookmarkGroupMigration, bookmarkDisplayRows } from "../lib/shared-bookmarks";
-import { prewarmDictionaryLookup } from "../lib/dictionary-lookup";
-import { clearQueryCache, queryScripture, searchScripture } from "../lib/scripture-api";
+import { clearDictionaryLookup, prewarmDictionaryLookup } from "../lib/dictionary-lookup";
+import { clearQueryCache, queryScripture, searchScripture, type SearchSort, type ServerSearchVerse } from "../lib/scripture-api";
+import { SearchResultCard } from "./components/SearchResultCard";
+import { SearchFilters, type SearchFilterValue } from "./components/SearchFilters";
+import { DownloadManager } from "./components/DownloadManager";
 import StudyPanel from "./components/StudyPanel";
 import { BookmarkMenu } from "./components/BookmarkMenu";
 import { OfflineShell } from "./components/OfflineShell";
@@ -118,6 +119,7 @@ interface NoteEditor {
 }
 
 interface SearchArrival {
+  diacritics?: "fold" | "exact";
   book: number;
   chapter: number;
   verse: number;
@@ -226,7 +228,8 @@ export default function Home() {
   const [searchScope, setSearchScope] = useState<SearchScope>("all");
   const [searchTotal, setSearchTotal] = useState(0);
   const [searchSha, setSearchSha] = useState<string | undefined>();
-  const [searchSort, setSearchSort] = useState<"canonical" | "relevance">("canonical");
+  const [searchEngineVersion, setSearchEngineVersion] = useState<number | undefined>();
+  const [searchSort, setSearchSort] = useState<SearchSort>("canonical");
   const [searchDiacritics, setSearchDiacritics] = useState<"fold" | "exact">("fold");
   const [searchExclude, setSearchExclude] = useState("");
   const [searchProximity, setSearchProximity] = useState<number | undefined>();
@@ -234,12 +237,9 @@ export default function Home() {
   const [studyTarget, setStudyTarget] = useState<{verse?:number;word?:string;strong?:string[]}|null>(null);
   const [referenceTarget, setReferenceTarget] = useState<string | null>(null);
   const [annotationsEnabled, setAnnotationsEnabled] = useState(true);
-  const [offlineAvailable, setOfflineAvailable] = useState(false);
-  const [offlineLoading, setOfflineLoading] = useState(false);
-  const [offlineMessage, setOfflineMessage] = useState("");
   const [searchLoading, setSearchLoading] = useState(false);
   const [searchError, setSearchError] = useState("");
-  const [searchResults, setSearchResults] = useState<SearchVerse[]>([]);
+  const [searchResults, setSearchResults] = useState<ServerSearchVerse[]>([]);
   const [searchCursor, setSearchCursor] = useState(0);
   const [searchComplete, setSearchComplete] = useState(true);
   const [searchRunning, setSearchRunning] = useState(false);
@@ -250,7 +250,6 @@ export default function Home() {
   const booksRef = useRef<Book[]>([]);
   const searchAbort = useRef<AbortController | null>(null);
   const searchScanId = useRef(0);
-  const offlineRequestId = useRef(0);
   const touchStart = useRef<{ x: number; y: number; boundary: -1 | 0 | 1 } | null>(null);
   const importInput = useRef<HTMLInputElement | null>(null);
   const boundaryLock = useRef(false);
@@ -598,11 +597,11 @@ export default function Home() {
   useEffect(() => {
     if (!ready) return;
     const activeRequest = ++requestId.current;
-    const loadingTimer = window.setTimeout(() => {
+    const loadingIndicator = deferLoading(() => {
       setLoading(true);
       setError("");
       closeSelectionToolbar();
-    }, 0);
+    }, () => { if (activeRequest === requestId.current) setLoading(false); });
 
     void (async () => {
       try {
@@ -662,6 +661,7 @@ export default function Home() {
         setChapters(allChapters);
         setPassage(textResult.data);
         setVerified(textResult.verified);
+        setError("");
         document.title = `${textResult.data.name} · getBible.Life`;
         window.history.replaceState({}, "", passagePath(normalized, selectedBook.name));
         setPathBookSlug(bookSlug(selectedBook.name));
@@ -672,11 +672,11 @@ export default function Home() {
           setError(translatorRef.current("passageLoadError"));
         }
       } finally {
-        if (activeRequest === requestId.current) setLoading(false);
+        loadingIndicator.finish();
       }
     })();
 
-    return () => { window.clearTimeout(loadingTimer); if (requestId.current === activeRequest) requestId.current += 1; };
+    return () => { loadingIndicator.cancel(); if (requestId.current === activeRequest) requestId.current += 1; };
   }, [closeSelectionToolbar, go, pathBookSlug, ready, route]);
 
   const dictionaryTranslation = passage?.abbreviation;
@@ -810,6 +810,12 @@ export default function Home() {
     };
   }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, studyTarget, referenceTarget, turn, bookmarkTarget]);
 
+  const changeSearchFilters = (next: SearchFilterValue) => {
+    setSearchWords(next.words); setSearchMatch(next.match); setSearchCaseSensitive(next.caseSensitive);
+    setSearchScope(next.scope); setSearchSort(next.sort); setSearchDiacritics(next.diacritics);
+    setSearchExclude(next.exclude); setSearchProximity(next.proximity);
+  };
+
   const searchOptions = useMemo(() => ({
     words: searchWords, match: searchMatch, caseSensitive: searchCaseSensitive,
     scope: searchScope, locale: translation?.lang, sort: searchSort,
@@ -823,7 +829,7 @@ export default function Home() {
     const controller = new AbortController();
     searchAbort.current = controller;
     const resetTimer = window.setTimeout(() => {
-      setSearchResults([]); setSearchCursor(0); setSearchTotal(0); setSearchSha(undefined); setSearchError("");
+      setSearchResults([]); setSearchCursor(0); setSearchTotal(0); setSearchSha(undefined); setSearchEngineVersion(undefined); setSearchError("");
       setSearchLoading(Boolean(searchOpen && searchQuery.trim() && translation));
       setSearchRunning(Boolean(searchOpen && searchQuery.trim() && translation));
       setSearchComplete(!searchOpen || !searchQuery.trim());
@@ -835,7 +841,7 @@ export default function Home() {
       void searchScripture(translation.abbreviation, searchQuery, searchOptions, 0, controller.signal).then((page) => {
         if (scan !== searchScanId.current || controller.signal.aborted) return;
         setSearchResults(page.results); setSearchCursor(page.nextCursor); setSearchComplete(page.complete);
-        setSearchTotal(page.total); setSearchSha(page.sha);
+        setSearchTotal(page.total); setSearchSha(page.sha); setSearchEngineVersion(page.engineVersion);
       }).catch((caught: unknown) => {
         if (scan === searchScanId.current && !controller.signal.aborted) setSearchError(caught instanceof Error ? caught.message : "Unable to search Scripture.");
       }).finally(() => {
@@ -854,6 +860,7 @@ export default function Home() {
     void searchScripture(translation.abbreviation, searchQuery, searchOptions, searchCursor, controller.signal).then((page) => {
       if (scan !== searchScanId.current || controller.signal.aborted) return;
       if (searchSha && page.sha && searchSha !== page.sha) throw new Error("The translation changed during this search. Run your search again.");
+      if (searchEngineVersion !== undefined && page.engineVersion !== undefined && searchEngineVersion !== page.engineVersion) throw new Error("The search index changed. Run your search again.");
       setSearchResults((current) => {
         const seen = new Set(current.map((item) => item.book + "/" + item.chapter + "/" + item.verse));
         return [...current, ...page.results.filter((item) => !seen.has(item.book + "/" + item.chapter + "/" + item.verse))];
@@ -862,30 +869,6 @@ export default function Home() {
     }).catch((caught: unknown) => {
       if (scan === searchScanId.current && !controller.signal.aborted) setSearchError(caught instanceof Error ? caught.message : "Unable to load more results.");
     }).finally(() => { if (scan === searchScanId.current && !controller.signal.aborted) setSearchRunning(false); });
-  };
-
-  useEffect(() => {
-    let active = true;
-    offlineRequestId.current += 1;
-    void fullTranslationAvailable(route.translation).then((available) => {
-      if (active) { setOfflineLoading(false); setOfflineMessage(""); setOfflineAvailable(available); }
-    });
-    return () => { active = false; };
-  }, [route.translation]);
-
-  const downloadTranslation = async () => {
-    if (!translation || offlineLoading) return;
-    const abbreviation = translation.abbreviation;
-    const download = ++offlineRequestId.current;
-    setOfflineLoading(true); setOfflineMessage("");
-    try {
-      const [downloaded, interfaceSaved] = await Promise.all([loadFullTranslation(abbreviation, translation.sha), prepareOfflineReader()]);
-      const saved = await fullTranslationAvailable(abbreviation);
-      if (download !== offlineRequestId.current) return;
-      setOfflineAvailable(saved);
-      setOfflineMessage(saved ? (interfaceSaved ? (downloaded.verified ? "Translation and reader saved for offline use, including available study metadata." : "Previously saved translation and reader are available offline. The translation update could not be verified.") : "Translation data is saved, but the reader interface could not be saved for offline use. Keep this page open and try the download again while connected.") : "Downloaded, but this browser could not save it. Check available storage.");
-    } catch (caught) { if (download === offlineRequestId.current) setOfflineMessage(caught instanceof Error ? caught.message : "Unable to download this translation."); }
-    finally { if (download === offlineRequestId.current) setOfflineLoading(false); }
   };
 
   const openReference = (reference: string) => {
@@ -1159,8 +1142,6 @@ export default function Home() {
     closeSelectionToolbar();
 
     setDailyHighlight(null);
-    setOfflineAvailable(false);
-    setOfflineMessage("");
     setSearchQuery("");
     setSearchResults([]);
     setSearchOpen(false);
@@ -1285,47 +1266,31 @@ export default function Home() {
 
       {searchOpen ? <section id="bible-search" className="search-overlay" role="dialog" aria-label={t("searchBible")}>
         <div className="search-heading">
-          <div><strong>{t("searchTranslation", { translation: translation?.abbreviation.toUpperCase() ?? "" })}</strong><small>Search words or Scripture references · {searchTotal.toLocaleString(locale)} results</small></div>
+          <div><strong>{t("searchTranslation", { translation: translation?.abbreviation.toUpperCase() ?? "" })}</strong><small>{t("searchWordsOrReferences")}</small></div>
           <button type="button" aria-label={t("closeSearch")} onClick={() => { searchScanId.current += 1; searchAbort.current?.abort(); setSearchRunning(false); setSearchOpen(false); }}>×</button>
         </div>
         <label className="search-query">
           <span className="sr-only">{t("searchThisTranslation")}</span>
           <input autoFocus type="search" value={searchQuery} placeholder={t("searchTheBible")} onChange={(event) => restartSearch(event.target.value)} />
         </label>
-        <div className="search-filters">
-          <label><span>{t("words")}</span><select value={searchWords} onChange={(event) => setSearchWords(event.target.value as WordMode)}>
-            <option value="all">{t("allWords")}</option><option value="any">{t("anyWord")}</option><option value="phrase">{t("exactPhrase")}</option>
-          </select></label>
-          <label><span>{t("match")}</span><select value={searchMatch} onChange={(event) => setSearchMatch(event.target.value as MatchMode)}>
-            <option value="exact">{t("exactWord")}</option><option value="partial">{t("partialWord")}</option>
-          </select></label>
-          <label><span>{t("case")}</span><select value={searchCaseSensitive ? "sensitive" : "insensitive"} onChange={(event) => setSearchCaseSensitive(event.target.value === "sensitive")}>
-            <option value="insensitive">{t("insensitive")}</option><option value="sensitive">{t("sensitive")}</option>
-          </select></label>
-          <label><span>{t("where")}</span><select value={searchScope} onChange={(event) => setSearchScope(event.target.value as SearchScope)}>
-            <option value="all">{t("wholeBible")}</option><option value="ot">{t("oldTestament")}</option><option value="nt">{t("newTestament")}</option>
-            {books.map((book) => <option key={book.nr} value={`book:${book.nr}`}>{book.name}</option>)}
-          </select></label>
-        </div>
-        <details className="search-advanced"><summary>More filters</summary>
-          <label>Sort <select value={searchSort} onChange={(event) => setSearchSort(event.target.value as "canonical" | "relevance")}><option value="canonical">Bible order</option><option value="relevance">Relevance</option></select></label>
-          <label>Accents <select value={searchDiacritics} onChange={(event) => setSearchDiacritics(event.target.value as "fold" | "exact")}><option value="fold">Ignore accents</option><option value="exact">Match accents</option></select></label>
-          <label>Exclude <input value={searchExclude} onChange={(event) => setSearchExclude(event.target.value)} placeholder="Words to exclude" /></label>
-          <label>Within words <input type="number" min="0" max="100" disabled={searchWords !== "all"} value={searchProximity ?? ""} placeholder="Any distance" onChange={(event) => setSearchProximity(event.target.value === "" ? undefined : Math.max(0,Math.min(100,Number(event.target.value)||0)))} /></label>
-        </details>
+        <SearchFilters books={books} t={t}
+          value={{ words: searchWords, match: searchMatch, caseSensitive: searchCaseSensitive, scope: searchScope, sort: searchSort, diacritics: searchDiacritics, exclude: searchExclude, proximity: searchProximity }}
+          onChange={changeSearchFilters}
+          onReset={() => changeSearchFilters({ words: "all", match: "exact", caseSensitive: false, scope: "all", sort: "canonical", diacritics: "fold", exclude: "", proximity: undefined })}
+        />
         <div className="search-results" aria-live="polite" onScroll={(event) => {
           const element = event.currentTarget;
           if (element.scrollHeight - element.scrollTop - element.clientHeight < 180) loadMoreSearchResults();
         }}>
-          {!searchQuery.trim() ? <p className="search-prompt">{t("searchPrompt")}</p> : searchError ? <div className="search-error" role="alert"><p>{searchError}</p><button type="button" onClick={() => restartSearch(searchQuery)}>Try search again</button></div> : searchLoading ? <div className="search-initializing"><i /><strong>{t("searching")}</strong><span>Searching {translation?.translation ?? "Scripture"}…</span></div> : <>
-            <p className="search-count">{countMessage(searchResults.length, "resultLoaded", "resultsLoaded")} · {t(searchComplete ? "endOfResults" : "scrollForMore")}</p>
-            {searchResults.length ? <ol>{searchResults.map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><button type="button" onClick={() => {
-              setSearchArrival({ book: result.book, chapter: result.chapter, verse: result.verse, query: searchQuery, match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang, token: Date.now() });
+          {!searchQuery.trim() ? <p className="search-prompt">{t("searchPrompt")}</p> : searchError ? <div className="search-error" role="alert"><p>{searchError}</p><button type="button" onClick={() => restartSearch(searchQuery)}>{t("searchRetry")}</button></div> : searchLoading ? <div className="search-initializing"><i /><strong>{t("searching")}</strong><span>{t("searchInTranslation", { translation: translation?.translation ?? "Scripture" })}</span></div> : <>
+            <div className="search-count"><strong>{t("searchResultTotal", { count: searchTotal.toLocaleString(locale) })}</strong><span>{t("searchLoadedOfTotal", { loaded: searchResults.length.toLocaleString(locale), total: searchTotal.toLocaleString(locale) })} · {t(searchComplete ? (searchResults.length < searchTotal ? "searchNarrowResults" : "endOfResults") : "scrollForMore")}</span></div>
+            {searchResults.length ? <ol>{searchResults.map((result) => <li key={`${result.book}/${result.chapter}/${result.verse}`}><SearchResultCard result={result} query={searchQuery} match={searchMatch} caseSensitive={searchCaseSensitive} diacritics={searchDiacritics} locale={translation?.lang} showScore={searchSort === "relevance"} t={t} onOpen={() => {
+              setSearchArrival({ book: result.book, chapter: result.chapter, verse: result.verse, query: searchQuery, match: searchMatch, caseSensitive: searchCaseSensitive, diacritics: searchDiacritics, locale: translation?.lang, token: Date.now() });
               setPendingVerse(result.verse);
               go({ translation: translation?.abbreviation || route.translation, book: result.book, chapter: result.chapter }, false, result.bookName);
               setSearchOpen(false);
-            }}><strong>{result.reference}</strong><span>{highlightSearchText(result.text, searchQuery, { match: searchMatch, caseSensitive: searchCaseSensitive, locale: translation?.lang }).map((segment, index) => segment.highlighted ? <mark key={index}>{segment.text}</mark> : segment.text)}</span></button></li>)}</ol> : searchRunning ? <div className="search-more"><i />{t("searching")}</div> : <p className="search-prompt">{t("noSearchResults")}</p>}
-            {searchRunning && searchResults.length ? <div className="search-more"><i />{t("loadingMoreResults")}</div> : !searchComplete && searchResults.length ? <button className="search-page-button" type="button" onClick={loadMoreSearchResults}>Load more results</button> : null}
+            }} /></li>)}</ol> : searchRunning ? <div className="search-more"><i />{t("searching")}</div> : <p className="search-prompt">{t("noSearchResults")}</p>}
+            {searchRunning && searchResults.length ? <div className="search-more"><i />{t("loadingMoreResults")}</div> : !searchComplete && searchResults.length ? <button className="search-page-button" type="button" onClick={loadMoreSearchResults}>{t("searchLoadMore")}</button> : null}
           </>}
         </div>
       </section> : null}
@@ -1532,12 +1497,7 @@ export default function Home() {
               <p className="cache-status">
                 {t(verified ? "contentHashVerified" : "showingSavedContent")}
               </p>
-              <div className="offline-tools">
-                <strong>Offline reading</strong>
-                <p>Save the entire translation in one download. Available dictionaries and commentaries can be saved from Study.</p>
-                <button type="button" disabled={offlineLoading || !translation} onClick={() => void downloadTranslation()}>{offlineLoading ? "Downloading translation…" : offlineAvailable ? "Check offline translation" : "Download translation"}</button>
-                <p role="status">{offlineMessage || (offlineAvailable ? "Translation data is saved in this browser." : "Read downloaded chapters without a connection.")}</p>
-              </div>
+              <DownloadManager translation={translation} t={t} onCacheChange={clearDictionaryLookup} />
               <button
                 className="plain-action"
                 type="button"

@@ -1,3 +1,5 @@
+import { isCacheFresh } from "./cache-policy.ts";
+
 /** Public study-resource contracts. All resources are read-only JSON documents. */
 export const DICTIONARIES_ROOT = "https://dictionaries.getbible.net/v1";
 export const COMMENTARIES_ROOT = "https://commentaries.getbible.net/v1";
@@ -65,27 +67,42 @@ export class StudyApiError extends Error {
   constructor(message: string, status = 0) { super(message); this.name = "StudyApiError"; this.status = status; }
 }
 
-const memory = new Map<string, { value: unknown; savedAt: number }>();
-const corpusMemory = new Map<string, unknown>();
+type CachedDocument = { value: unknown; savedAt: number };
+const memory = new Map<string, CachedDocument>();
+const corpusMemory = new Map<string, CachedDocument>();
 const corpusReads = new Map<string, Promise<unknown | null>>();
 const wholeDictionaryIndexes = new WeakMap<WholeDictionary, DictionaryIndex>();
 const wholeDictionaryEntries = new WeakMap<WholeDictionary, Map<string, DictionaryEntry>>();
-const activeRequests = new Set<AbortController>();
+const activeRequests = new Map<AbortController, string>();
+const refreshes = new Map<string, Promise<unknown>>();
+const resourceRevisions = new Map<string, number>();
+let writes: Promise<unknown> = Promise.resolve();
+let activeRefreshes = 0;
+const waitingRefreshes: (() => void)[] = [];
 let cacheGeneration = 0;
 let dictionaryRevision = 0;
 /** Derived word indexes must follow clear/download/remove operations too. */
 export const studyCacheRevision = () => `${cacheGeneration}/${dictionaryRevision}`;
-const MEMORY_TTL = 5 * 60 * 1_000;
 const MEMORY_LIMIT = 24;
 const CORPUS_LIMIT = 2;
+const CACHED_AT = "x-getbible-cached-at";
+const CACHE_BYTES = "x-getbible-cache-bytes";
 const aborted = (signal?: AbortSignal) => { if (signal?.aborted) throw new DOMException("Request cancelled", "AbortError"); };
-function rememberDocument(url: string, value: unknown) {
-  for (const [key, document] of memory) if (Date.now() - document.savedAt >= MEMORY_TTL) memory.delete(key);
-  memory.delete(url); memory.set(url, { value, savedAt: Date.now() });
+const online = () => typeof navigator === "undefined" || navigator.onLine !== false;
+function writeCache<T>(action: () => Promise<T>): Promise<T> {
+  const result = writes.then(action, action);
+  writes = result.catch(() => {});
+  return result;
+}
+function revision(url: string) {
+  return `${cacheGeneration}/${[...resourceRevisions].filter(([prefix]) => url === `${prefix}.json` || url.startsWith(`${prefix}/`)).map(([, value]) => value).join("/")}`;
+}
+function rememberDocument(url: string, value: unknown, savedAt = Date.now()) {
+  memory.delete(url); memory.set(url, { value, savedAt });
   while (memory.size > MEMORY_LIMIT) memory.delete(memory.keys().next().value!);
 }
-function rememberCorpus(url: string, value: unknown) {
-  corpusMemory.delete(url); corpusMemory.set(url, value);
+function rememberCorpus(url: string, value: unknown, savedAt = Date.now()) {
+  corpusMemory.delete(url); corpusMemory.set(url, { value, savedAt });
   while (corpusMemory.size > CORPUS_LIMIT) corpusMemory.delete(corpusMemory.keys().next().value!);
 }
 const segment = (id: string) => {
@@ -100,31 +117,38 @@ async function store(): Promise<Cache | null> {
   try { return typeof caches !== "undefined" ? await caches.open(STUDY_CACHE_NAME) : null; } catch { return null; }
 }
 async function saved<T>(url: string, corpus = false): Promise<T | null> {
-  const generation = cacheGeneration;
-  if (corpusMemory.has(url)) {
-    const value = corpusMemory.get(url) as T;
-    rememberCorpus(url, value);
-    return value;
+  const generation = revision(url);
+  const recent = (corpus ? corpusMemory : memory).get(url);
+  if (recent) {
+    if (corpus) rememberCorpus(url, recent.value, recent.savedAt);
+    else rememberDocument(url, recent.value, recent.savedAt);
+    if (!isCacheFresh(recent.savedAt)) refreshInBackground(url, corpus);
+    return recent.value as T;
   }
   if (corpus && corpusReads.has(url)) return await corpusReads.get(url) as T | null;
   const read = async () => {
     try {
       const response = await (await store())?.match(url);
       const value = response ? await response.json() as T : null;
-      if (generation !== cacheGeneration) return null;
-      if (value && corpus) rememberCorpus(url, value);
+      if (generation !== revision(url)) return null;
+      if (value && response) {
+        const savedAt = Number(response.headers.get(CACHED_AT)) || 0;
+        if (corpus) rememberCorpus(url, value, savedAt);
+        else rememberDocument(url, value, savedAt);
+        if (!isCacheFresh(savedAt)) refreshInBackground(url, corpus);
+      }
       return value;
     } catch { return null; }
   };
   if (!corpus) return read();
-  const pending = read().finally(() => { if (generation === cacheGeneration) corpusReads.delete(url); });
+  const pending = read().finally(() => { if (corpusReads.get(url) === pending) corpusReads.delete(url); });
   corpusReads.set(url, pending);
   return pending;
 }
 async function network<T>(url: string, consume: (response: Response) => Promise<T>, signal?: AbortSignal, timeout = 45_000, noStore = false): Promise<T> {
   aborted(signal);
   const controller = new AbortController();
-  activeRequests.add(controller);
+  activeRequests.set(controller, url);
   const abort = () => controller.abort();
   signal?.addEventListener("abort", abort, { once: true });
   let timedOut = false;
@@ -141,21 +165,68 @@ async function network<T>(url: string, consume: (response: Response) => Promise<
     throw error;
   } finally { clearTimeout(timer); signal?.removeEventListener("abort", abort); activeRequests.delete(controller); }
 }
-async function request<T>(url: string, signal?: AbortSignal, refresh = false): Promise<T> {
-  const generation = cacheGeneration;
+async function fetchDocument<T>(url: string, signal?: AbortSignal): Promise<T> {
+  const generation = revision(url);
+  const { value, text } = await network(url, async (response) => {
+    const text = await response.text();
+    return { text, value: JSON.parse(text) as T };
+  }, signal, 45_000, true);
+  if (!value || typeof value !== "object") throw new StudyApiError("The study resource returned an invalid document.");
   aborted(signal);
-  const recent = memory.get(url);
-  if (!refresh && recent && Date.now() - recent.savedAt < MEMORY_TTL) { memory.delete(url); memory.set(url, recent); return recent.value as T; }
+  if (generation !== revision(url)) throw new DOMException("Request cancelled", "AbortError");
+  const savedAt = Date.now();
+  rememberDocument(url, value, savedAt);
   try {
-    const { value, cacheResponse } = await network(url, async (response) => ({ cacheResponse: response.clone(), value: await response.json() as T }), signal);
-    if (!value || typeof value !== "object") throw new StudyApiError("The study resource returned an invalid document.");
+    await writeCache(async () => {
+      const cache = await store();
+      if (generation !== revision(url)) return;
+      await cache?.put(url, new Response(text, { headers: {
+        "content-type": "application/json", [CACHED_AT]: String(savedAt), [CACHE_BYTES]: String(new TextEncoder().encode(text).byteLength),
+      } }));
+    });
+  } catch { /* Reading still works when storage is full or unavailable. */ }
+  if (generation !== revision(url)) throw new DOMException("Request cancelled", "AbortError");
+  return value;
+}
+function refreshInBackground(url: string, corpus: boolean) {
+  if (!online() || refreshes.has(url)) return;
+  const generation = revision(url);
+  const pending = (async () => {
+    await new Promise<void>((resolve) => {
+      const start = () => { activeRefreshes += 1; resolve(); };
+      if (activeRefreshes < 3) start(); else waitingRefreshes.push(start);
+    });
+    try {
+      if (!online() || generation !== revision(url)) return;
+      // Full modules retain checksum verification when their timestamp expires.
+      if (corpus) {
+        const root = [DICTIONARIES_ROOT, COMMENTARIES_ROOT, BOOKMARKS_ROOT].find((candidate) => url.startsWith(`${candidate}/`));
+        if (root) return await download(root, url.slice(root.length + 1), root === BOOKMARKS_ROOT ? "checksums.json" : "hashes.json");
+      }
+      const value = await fetchDocument(url);
+      if (url.startsWith(`${DICTIONARIES_ROOT}/`)) dictionaryRevision += 1;
+      return value;
+    } finally {
+      activeRefreshes -= 1;
+      waitingRefreshes.shift()?.();
+    }
+  })().catch(() => { /* Stale content remains usable while offline or during an upstream failure. */ }).finally(() => {
+    if (refreshes.get(url) === pending) refreshes.delete(url);
+  });
+  refreshes.set(url, pending);
+}
+async function request<T>(url: string, signal?: AbortSignal, refresh = false): Promise<T> {
+  aborted(signal);
+  if (!refresh) {
+    const cached = await saved<T>(url);
     aborted(signal);
-    if (generation !== cacheGeneration) throw new DOMException("Request cancelled", "AbortError");
-    rememberDocument(url, value);
-    try { await (await store())?.put(url, cacheResponse); } catch { /* Reading still works when storage is full or unavailable. */ }
-    return value;
+    if (cached) return cached;
+  }
+  try {
+    return await fetchDocument<T>(url, signal);
   } catch (error) {
     aborted(signal);
+    if (error instanceof Error && error.name === "AbortError") throw error;
     // A removed document must not be resurrected from a stale online cache.
     if (error instanceof StudyApiError && error.status === 404) throw error;
     const offline = await saved<T>(url);
@@ -265,9 +336,17 @@ export function commentsForVerse(entries: CommentaryEntry[], verse?: number): Co
   return verse === undefined ? entries : entries.filter((entry) => entry.verse === 0 || (entry.verses ?? [entry.verse]).includes(verse));
 }
 
-export interface StudyTextSegment { text: string; reference?: ScriptureReference }
+export interface StudyTextSegment { text: string; references?: ScriptureReference[] }
+/** Source documents may contain introductions or malformed coordinates, neither is a verse link. */
+export function isReadableScriptureReference(reference: ScriptureReference): boolean {
+  return Number.isSafeInteger(reference.book) && reference.book >= 1 && reference.book <= 83 &&
+    Number.isSafeInteger(reference.chapter) && reference.chapter > 0 &&
+    (reference.verse === undefined || (Number.isSafeInteger(reference.verse) && reference.verse > 0)) &&
+    (reference.verses === undefined || (Array.isArray(reference.verses) && reference.verses.every((verse) => Number.isSafeInteger(verse) && verse > 0)));
+}
 /** Numeric book addressing keeps citations usable across reader languages. */
 export function scriptureReferenceQuery(reference: ScriptureReference): string {
+  if (!isReadableScriptureReference(reference)) throw new StudyApiError("Invalid scripture reference.");
   const verses = [...new Set(reference.verses ?? (reference.verse === undefined ? [] : [reference.verse]))].sort((a, b) => a - b);
   const ranges: string[] = [];
   for (let index = 0; index < verses.length; index += 1) {
@@ -278,21 +357,30 @@ export function scriptureReferenceQuery(reference: ScriptureReference): string {
   }
   return `${reference.book} ${reference.chapter}${ranges.length ? `:${ranges.join(",")}` : ""}`;
 }
+/** One published link can identify several passages; preserve each one in source order. */
+export function scriptureReferencesQuery(references: ScriptureReference[]): string {
+  return [...new Set(references.filter(isReadableScriptureReference).map(scriptureReferenceQuery))].join(";");
+}
 /** Link only published citation strings; plain text is preserved byte-for-byte. */
 export function studyTextSegments(text: string, references: ScriptureReference[] = []): StudyTextSegment[] {
-  const ranges: { start: number; end: number; reference: ScriptureReference }[] = [];
+  const groups = new Map<string, ScriptureReference[]>();
   for (const reference of references) {
-    if (!reference.text) continue;
-    let start = text.indexOf(reference.text);
+    if (!reference.text || !isReadableScriptureReference(reference)) continue;
+    const group = groups.get(reference.text) ?? [];
+    group.push(reference); groups.set(reference.text, group);
+  }
+  const ranges: { start: number; end: number; references: ScriptureReference[] }[] = [];
+  for (const [label, group] of groups) {
+    let start = text.indexOf(label);
     while (start !== -1) {
-      const end = start + reference.text.length;
+      const end = start + label.length;
       const before = text[start - 1] ?? "", after = text[end] ?? "";
       // A published John 1:1 citation must not link the prefix of John 1:10.
-      const startsInWord = /[\p{L}\p{N}]/u.test(reference.text[0]) && /[\p{L}\p{N}]/u.test(before);
-      const endsInWord = /[\p{L}\p{N}]/u.test(reference.text.at(-1) ?? "") && /[\p{L}\p{N}]/u.test(after);
-      const continuesRange = /\d/u.test(reference.text.at(-1) ?? "") && /^[-–,:]\s*\d/u.test(text.slice(end));
-      if (!startsInWord && !endsInWord && !continuesRange) ranges.push({ start, end, reference });
-      start = text.indexOf(reference.text, start + reference.text.length);
+      const startsInWord = /[\p{L}\p{N}]/u.test(label[0]) && /[\p{L}\p{N}]/u.test(before);
+      const endsInWord = /[\p{L}\p{N}]/u.test(label.at(-1) ?? "") && /[\p{L}\p{N}]/u.test(after);
+      const continuesRange = /\d/u.test(label.at(-1) ?? "") && /^[-–,:]\s*\d/u.test(text.slice(end));
+      if (!startsInWord && !endsInWord && !continuesRange) ranges.push({ start, end, references: group });
+      start = text.indexOf(label, start + label.length);
     }
   }
   ranges.sort((a, b) => a.start - b.start || b.end - a.end);
@@ -301,7 +389,7 @@ export function studyTextSegments(text: string, references: ScriptureReference[]
   for (const range of ranges) {
     if (range.start < position) continue;
     if (range.start > position) result.push({ text: text.slice(position, range.start) });
-    result.push({ text: text.slice(range.start, range.end), reference: range.reference });
+    result.push({ text: text.slice(range.start, range.end), references: range.references });
     position = range.end;
   }
   if (position < text.length || !result.length) result.push({ text: text.slice(position) });
@@ -336,34 +424,76 @@ export async function getBookmarkLocale(locale: string, signal?: AbortSignal): P
 }
 export const getBookmarkChapter = (book: number, chapter: number, signal?: AbortSignal) => request<BookmarkChapter>(`${BOOKMARKS_ROOT}/verses/${coordinate(book, 1, 66)}/${coordinate(chapter, 1, 150)}.json`, signal);
 
-type ResourceKind = "dictionary" | "commentary";
+export type ResourceKind = "dictionary" | "commentary";
 const resourceRoot = (kind: ResourceKind) => kind === "dictionary" ? DICTIONARIES_ROOT : COMMENTARIES_ROOT;
+export interface StudyCacheStatus {
+  kind: ResourceKind; id: string; downloaded: boolean; documents: number; bytes: number; savedAt: number;
+}
+export interface StudyDownloadProgress { completed: number; total: number; id: string; name: string; bytes: number }
+export async function listStudyCache(kind?: ResourceKind): Promise<StudyCacheStatus[]> {
+  const cache = await store();
+  if (!cache) return [];
+  const resources = new Map<string, StudyCacheStatus>();
+  for (const request of await cache.keys()) {
+    const resourceKind = (["dictionary", "commentary"] as const).find((item) => (!kind || kind === item) && request.url.startsWith(`${resourceRoot(item)}/`));
+    if (!resourceKind) continue;
+    const path = request.url.slice(resourceRoot(resourceKind).length + 1);
+    const part = path.split("/")[0];
+    if (["dictionaries.json", "commentaries.json", "hashes.json"].includes(part)) continue;
+    const id = decodeURIComponent(part.replace(/\.json$/, ""));
+    const response = await cache.match(request);
+    if (!response) continue;
+    const savedAt = Number(response.headers.get(CACHED_AT)) || 0;
+    const key = `${resourceKind}/${id}`;
+    const status = resources.get(key) ?? { kind: resourceKind, id, downloaded: false, documents: 0, bytes: 0, savedAt };
+    status.downloaded ||= path === part && part.endsWith(".json");
+    status.documents += 1;
+    status.bytes += Number(response.headers.get(CACHE_BYTES)) || Number(response.headers.get("content-length")) || 0;
+    status.savedAt = Math.min(status.savedAt, savedAt);
+    resources.set(key, status);
+  }
+  return [...resources.values()].sort((a, b) => a.kind.localeCompare(b.kind) || a.id.localeCompare(b.id));
+}
 export async function isStudyDownloaded(kind: ResourceKind, id: string): Promise<boolean> {
   return Boolean(await (await store())?.match(`${resourceRoot(kind)}/${segment(id)}.json`));
 }
-export async function removeStudyDownload(kind: ResourceKind, id: string): Promise<void> {
-  const url = `${resourceRoot(kind)}/${segment(id)}.json`;
-  await (await store())?.delete(url); memory.delete(url); corpusMemory.delete(url);
-  if (kind === "dictionary") dictionaryRevision += 1;
+async function removeCachedResources(prefix: string): Promise<void> {
+  const matches = (url: string) => url === `${prefix}.json` || url.startsWith(`${prefix}/`);
+  resourceRevisions.set(prefix, (resourceRevisions.get(prefix) ?? 0) + 1);
+  for (const [controller, url] of activeRequests) if (matches(url)) controller.abort();
+  for (const collection of [memory, corpusMemory, corpusReads, refreshes]) for (const url of collection.keys()) if (matches(url)) collection.delete(url);
+  await writeCache(async () => {
+    const cache = await store();
+    if (!cache) return;
+    const urls = (await cache.keys()).map((request) => request.url);
+    await Promise.all(urls.filter(matches).map((url) => cache.delete(url)));
+  });
 }
-export async function clearStudyCache(): Promise<void> {
+/** Removing a resource also clears previously read fragments and derived indexes. */
+export async function removeStudyDownload(kind: ResourceKind, id: string): Promise<void> {
+  if (kind === "dictionary") dictionaryRevision += 1;
+  await removeCachedResources(`${resourceRoot(kind)}/${segment(id)}`);
+}
+export async function clearStudyCache(kind?: ResourceKind): Promise<void> {
+  if (kind) {
+    if (kind === "dictionary") dictionaryRevision += 1;
+    await removeCachedResources(resourceRoot(kind));
+    return;
+  }
   cacheGeneration += 1;
-  for (const controller of activeRequests) controller.abort();
-  memory.clear(); corpusMemory.clear(); corpusReads.clear();
-  if (typeof caches !== "undefined") await caches.delete(STUDY_CACHE_NAME);
-  try {
-    const keys = Array.from({ length: localStorage.length }, (_, index) => localStorage.key(index));
-    for (const key of keys) if (key?.startsWith("getbible-study:")) localStorage.removeItem(key);
-  } catch { /* Browser preferences can be unavailable in a private session. */ }
+  for (const controller of activeRequests.keys()) controller.abort();
+  memory.clear(); corpusMemory.clear(); corpusReads.clear(); refreshes.clear(); resourceRevisions.clear();
+  await writeCache(async () => { if (typeof caches !== "undefined") await caches.delete(STUDY_CACHE_NAME); });
+  // Cache management must not reset the user's preferred dictionaries/commentaries.
 }
 
 /** Store the whole published document atomically only after SHA-256 verification. */
 async function download<T>(root: string, path: string, manifestPath: string, signal?: AbortSignal): Promise<T> {
-  const generation = cacheGeneration;
+  const url = `${root}/${path}`;
+  const generation = revision(url);
   const cache = await store();
   if (!cache) throw new StudyApiError("Offline storage is unavailable in this browser.");
   if (!globalThis.crypto?.subtle) throw new StudyApiError("This browser cannot verify offline downloads.");
-  const url = `${root}/${path}`;
   for (let attempt = 0; attempt < 2; attempt += 1) {
     aborted(signal);
     const [bytes, manifest] = await Promise.all([
@@ -375,16 +505,47 @@ async function download<T>(root: string, path: string, manifestPath: string, sig
       if (attempt === 0) continue;
       throw new StudyApiError("The resource changed during download. Please try again.");
     }
-    const value = JSON.parse(new TextDecoder().decode(bytes)) as T;
+    const value: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!value || typeof value !== "object" ||
+      (root === DICTIONARIES_ROOT && (!("entries" in value) || !Array.isArray(value.entries))) ||
+      (root === COMMENTARIES_ROOT && (!("books" in value) || !Array.isArray(value.books))) ||
+      (root === BOOKMARKS_ROOT && (!("topics" in value) || !Array.isArray(value.topics)))) {
+      throw new StudyApiError("The downloaded resource has an invalid document structure.");
+    }
     aborted(signal);
-    if (generation !== cacheGeneration) throw new DOMException("Request cancelled", "AbortError");
-    await cache.put(url, new Response(bytes, { headers: { "content-type": "application/json", "x-getbible-sha256": digest } }));
-    rememberCorpus(url, value);
+    if (generation !== revision(url)) throw new DOMException("Request cancelled", "AbortError");
+    const savedAt = Date.now();
+    await writeCache(async () => {
+      if (generation !== revision(url)) throw new DOMException("Request cancelled", "AbortError");
+      await cache.put(url, new Response(bytes, { headers: {
+        "content-type": "application/json", "x-getbible-sha256": digest, [CACHED_AT]: String(savedAt), [CACHE_BYTES]: String(bytes.byteLength),
+      } }));
+    });
+    if (generation !== revision(url)) throw new DOMException("Request cancelled", "AbortError");
+    rememberCorpus(url, value, savedAt);
     if (root === DICTIONARIES_ROOT) dictionaryRevision += 1;
-    return value;
+    return value as T;
   }
   throw new StudyApiError("The download could not be verified.");
 }
 export const downloadDictionary = (id: string, signal?: AbortSignal) => download<WholeDictionary>(DICTIONARIES_ROOT, `${segment(id)}.json`, "hashes.json", signal);
 export const downloadCommentary = (id: string, signal?: AbortSignal) => download<WholeCommentary>(COMMENTARIES_ROOT, `${segment(id)}.json`, "hashes.json", signal);
 export const downloadBookmarkCatalog = (signal?: AbortSignal) => download<BookmarkAll>(BOOKMARKS_ROOT, "all.json", "checksums.json", signal);
+
+/** Download sequentially to keep large verified modules within the browser's memory budget. */
+export async function downloadAllStudyResources(kind: ResourceKind, onProgress?: (progress: StudyDownloadProgress) => void, signal?: AbortSignal): Promise<void> {
+  const resources = kind === "dictionary" ? (await getDictionaryCatalog(signal)).dictionaries : (await getCommentaryCatalog(signal)).commentaries;
+  const available = resources.filter((resource) => resource.entry_count > 0);
+  let completed = 0, bytes = 0;
+  for (const resource of available) {
+    aborted(signal);
+    onProgress?.({ completed, total: available.length, id: resource.id, name: resource.name, bytes });
+    const cached = await (await store())?.match(`${resourceRoot(kind)}/${segment(resource.id)}.json`);
+    if (!cached || !isCacheFresh(Number(cached.headers.get(CACHED_AT)) || 0)) {
+      await (kind === "dictionary" ? downloadDictionary : downloadCommentary)(resource.id, signal);
+    }
+    completed += 1;
+    bytes += resource.bytes;
+    onProgress?.({ completed, total: available.length, id: resource.id, name: resource.name, bytes });
+  }
+}

@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { WEEK_MS, bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, resolvedLanguageName, translationLanguage, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
+import { bookMatchesSlug, bookSlug, fresh, getBibleLifeUrl, parsePassage, parsePassagePath, passagePath, passageSearch, resolvedLanguageName, translationLanguage, translationValues, validSha, valuesByNumber } from "../lib/getbible.ts";
+import { CACHE_MAX_AGE_MS } from "../lib/cache-policy.ts";
 import { compareMarkings, markedSegments, markingMatchesPassage, mergeColors, mergeMarkings, parseMarkingsBackup, passageKey, textSelectionHasMarking, translucentColor, wholeVerseMarking, withoutTextSelectionMarkings, withoutWholeVerseMarking } from "../lib/markings.ts";
 import { floatingToolbarPosition } from "../lib/floating-toolbar.ts";
 import { DEFAULT_TRANSLATION, dailyDateKey, dailyIsCurrent, parseDailyReference } from "../lib/daily.ts";
@@ -67,11 +68,12 @@ test("resolves and sorts translations with missing language names", () => {
   assert.deepEqual(list.map(translationLanguage), ["English", "Klingon", "Tok Pisin"]);
 });
 
-test("validates SHA-1 values and weekly freshness",()=>{
+test("validates SHA-1 values and thirty-day cache freshness",()=>{
   assert.equal(validSha("edeb04d81d465de30775b3cf9d15d08ea441345d"),true);
   assert.equal(validSha("not-a-sha"),false);
-  assert.equal(fresh(1_000,1_000+WEEK_MS-1),true);
-  assert.equal(fresh(1_000,1_000+WEEK_MS),false);
+  assert.equal(fresh(1_000,1_000+CACHE_MAX_AGE_MS-1),true);
+  assert.equal(fresh(1_000,1_000+CACHE_MAX_AGE_MS),false);
+  assert.equal(fresh(2_000,1_000),false);
 });
 
 test("identifies passages and whole-verse markings", () => {
