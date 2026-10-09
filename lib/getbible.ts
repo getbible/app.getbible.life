@@ -1,5 +1,6 @@
+import { isCacheFresh } from "./cache-policy.ts";
+
 export const API_ROOT = "https://api.getbible.net/v3";
-export const WEEK_MS = 604_800_000;
 
 export type Direction = "LTR" | "RTL" | string;
 export interface Translation {
@@ -150,5 +151,5 @@ export function bookMatchesSlug(name:string, slug:string):boolean {
   return normalize(name)===normalize(slug);
 }
 
-export const fresh = (checkedAt:number, now=Date.now()):boolean => checkedAt > 0 && now-checkedAt < WEEK_MS;
+export const fresh = isCacheFresh;
 export const validSha = (sha:string):boolean => /^[a-f0-9]{40}$/i.test(sha.trim());

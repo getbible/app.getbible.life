@@ -3,6 +3,7 @@ import {
   normalizeStudyTerm, studyCacheRevision, StudyApiError,
   type DictionaryCatalog, type DictionaryEntry, type DictionaryIndexEntry, type DictionarySummary,
 } from "./study-api.ts";
+import { isCacheFresh } from "./cache-policy.ts";
 
 export interface DictionaryMatch { dictionary: DictionarySummary; entries: DictionaryEntry[] }
 export interface DictionarySuggestion { dictionary: DictionarySummary; entry: DictionaryIndexEntry }
@@ -12,14 +13,13 @@ export interface DictionaryLookupResult {
 }
 interface Candidate { dictionary: string; entry: DictionaryIndexEntry }
 interface Engine {
-  key: string; savedAt: number; refresh: boolean; entries: number; users: number;
+  key: string; catalogKey: string; savedAt: number; refresh: boolean; entries: number; users: number;
   dictionaries: Map<string, DictionarySummary>; indexed: Set<string>; failures: Set<string>;
   words: Map<string, Candidate[]>; suggestionTerms: Set<string>; sortedTerms?: string[];
   definitions: Map<string, DictionaryEntry | null>; definitionCharacters: number;
   listeners: Set<(dictionary: string) => void>; preparation?: Promise<void>; controller?: AbortController;
 }
 
-const TTL = 5 * 60 * 1_000;
 const MAX_INDEX_ENTRIES = 400_000;
 const MAX_DEFINITIONS = 256;
 const MAX_DEFINITION_CHARACTERS = 2_000_000;
@@ -49,18 +49,27 @@ async function limited<T>(action: () => Promise<T>, signal?: AbortSignal): Promi
 }
 
 function engineFor(catalog: DictionaryCatalog): Engine {
-  const key = JSON.stringify([studyCacheRevision(), catalog.schema, catalog.generated_at,
+  const catalogKey = JSON.stringify([catalog.schema, catalog.generated_at,
     catalog.dictionaries.map((item) => [item.id, item.entry_count, item.unique_key_count, item.bytes])]);
-  if (!current || current.key !== key || (!catalog.generated_at && Date.now() - current.savedAt >= TTL)) {
-    const refresh = Boolean(current);
+  const key = `${studyCacheRevision()}/${catalogKey}`;
+  if (!current || current.key !== key || !isCacheFresh(current.savedAt)) {
+    // Publication changes bypass stale fragments; expiry/cache changes rebuild from the
+    // persistent cache, whose own timestamps schedule background refreshes as needed.
+    const refresh = Boolean(current && current.catalogKey !== catalogKey);
     current = {
-      key, refresh, savedAt: Date.now(), entries: 0, users: 0,
+      key, catalogKey, refresh, savedAt: Date.now(), entries: 0, users: 0,
       dictionaries: new Map(catalog.dictionaries.filter((item) => item.entry_count > 0).map((item) => [item.id, item])),
       indexed: new Set(), failures: new Set(), words: new Map(), suggestionTerms: new Set(),
       definitions: new Map(), definitionCharacters: 0, listeners: new Set(),
     };
   }
   return current;
+}
+
+/** Release derived session indexes after the user changes managed downloads. */
+export function clearDictionaryLookup(): void {
+  current?.controller?.abort();
+  current = undefined;
 }
 
 /** One incremental reverse index per published catalog; chapters reuse it. */

@@ -1,13 +1,18 @@
 import type { Chapter, Verse } from "./getbible.ts";
 import type { SearchOptions, SearchVerse } from "./search.ts";
+import { isCacheFresh } from "./cache-policy.ts";
 
 export const QUERY_ROOT = "https://query.getbible.net/v3";
 export const SEARCH_ROOT = "https://search.getbible.net/v3";
 const QUERY_CACHE = "getbible-query-v3";
-const queryMemory = new Map<string,Record<string,Chapter>>();
+type SavedQuery = {data:Record<string,Chapter>;savedAt:number};
+const queryMemory = new Map<string,SavedQuery>();
+const queryRefreshes = new Map<string,Promise<void>>();
+let queryGeneration=0;
+export type SearchSort = "canonical"|"canonical_desc"|"relevance";
 export type ServerSearchOptions = Omit<SearchOptions,"scope"> & {
   scope:SearchOptions["scope"]|"deuterocanon";
-  sort?:"canonical"|"relevance";
+  sort?:SearchSort;
   diacritics?:"fold"|"exact";
   exclude?:string[];
   proximity?:number;
@@ -74,22 +79,33 @@ export function normalizeScriptureReference(reference:string):string {
     return `${base}${endVerse===verse?"":`-${endVerse}`}`;
   }).join(";");
 }
-async function cachedQuery(url:string):Promise<Record<string,Chapter>|null> {
+async function cachedQuery(url:string):Promise<SavedQuery|null> {
   if (queryMemory.has(url)) return queryMemory.get(url)!;
   try {
     const response=await (await caches.open(QUERY_CACHE)).match(url);
-    return response?await response.json() as Record<string,Chapter>:null;
+    if (!response) return null;
+    const saved={data:await response.json() as Record<string,Chapter>,savedAt:Number(response.headers.get("x-getbible-cached-at")) || 0};
+    validateQuery(saved.data);
+    rememberQuery(url,saved);
+    return saved;
   } catch { return null; }
 }
-async function saveQuery(url:string,data:Record<string,Chapter>):Promise<void> {
-  queryMemory.delete(url);queryMemory.set(url,data);
+function rememberQuery(url:string,saved:SavedQuery):void {
+  queryMemory.delete(url);queryMemory.set(url,saved);
   while (queryMemory.size>48) queryMemory.delete(queryMemory.keys().next().value!);
+}
+async function saveQuery(url:string,data:Record<string,Chapter>,generation=queryGeneration):Promise<void> {
+  if (generation!==queryGeneration) return;
+  const savedAt=Date.now();
+  rememberQuery(url,{data,savedAt});
   try {
-    await (await caches.open(QUERY_CACHE)).put(url,new Response(JSON.stringify(data),{headers:{"content-type":"application/json"}}));
+    const cache=await caches.open(QUERY_CACHE);
+    if (generation!==queryGeneration) return;
+    await cache.put(url,new Response(JSON.stringify(data),{headers:{"content-type":"application/json","x-getbible-cached-at":String(savedAt)}}));
   } catch { /* Reference reading remains available when storage is disabled. */ }
 }
 export async function clearQueryCache():Promise<void> {
-  queryMemory.clear();
+  queryGeneration+=1;queryMemory.clear();queryRefreshes.clear();
   try { await caches.delete(QUERY_CACHE); } catch { /* No persistent cache is available. */ }
 }
 async function getJson<T>(url:string,signal?:AbortSignal):Promise<T> {
@@ -120,26 +136,42 @@ async function getJson<T>(url:string,signal?:AbortSignal):Promise<T> {
   }
 }
 
-/** Resolve single, ranged or semicolon-chained references as one encoded path segment. */
-export async function queryScripture(translation:string,reference:string,signal?:AbortSignal):Promise<Chapter[]> {
-  const abbr=translationId(translation),text=normalizeScriptureReference(reference);
-  if (!text || text.length>512) throw new ScriptureApiError("Enter a Scripture reference of at most 512 characters",400,"invalid_reference");
-  const url=`${QUERY_ROOT}/${encodeURIComponent(abbr)}/${encodeURIComponent(text)}`;
-  let result:Record<string,Chapter>;
-  let fromCache=false;
-  try { result=await getJson<Record<string,Chapter>>(url,signal); }
-  catch(error) {
-    if (signal?.aborted || !(error instanceof ScriptureApiError) || (error.status!==0 && error.status<500)) throw error;
-    const saved=await cachedQuery(url);
-    if (signal?.aborted) throw abortError();
-    if (!saved) throw error;
-    result=saved;fromCache=true;
-  }
+function validateQuery(result:Record<string,Chapter>):Chapter[] {
   const chapters=Object.values(result);
   if (!chapters.length) throw new ScriptureApiError("No Scripture was found for this reference",404,"reference_not_found");
   if (chapters.some(chapter=>!chapter || !Array.isArray(chapter.verses))) throw new ScriptureApiError("GetBible returned an invalid passage",502,"invalid_response");
+  return chapters;
+}
+
+function refreshQuery(url:string):void {
+  if (queryRefreshes.has(url) || (typeof navigator!=="undefined" && navigator.onLine===false)) return;
+  const generation=queryGeneration;
+  const request=getJson<Record<string,Chapter>>(url).then(async data=>{
+    validateQuery(data);
+    await saveQuery(url,data,generation);
+  }).catch(()=>{ /* Keep saved Scripture usable if background refresh fails. */ }).finally(()=>{
+    if (queryRefreshes.get(url)===request) queryRefreshes.delete(url);
+  });
+  queryRefreshes.set(url,request);
+}
+
+/** Resolve references immediately from saved data; refresh monthly without blocking reading. */
+export async function queryScripture(translation:string,reference:string,signal?:AbortSignal):Promise<Chapter[]> {
   if (signal?.aborted) throw abortError();
-  if (!fromCache) await saveQuery(url,result);
+  const abbr=translationId(translation),text=normalizeScriptureReference(reference);
+  if (!text || text.length>512) throw new ScriptureApiError("Enter a Scripture reference of at most 512 characters",400,"invalid_reference");
+  const url=`${QUERY_ROOT}/${encodeURIComponent(abbr)}/${encodeURIComponent(text)}`;
+  const saved=await cachedQuery(url);
+  if (signal?.aborted) throw abortError();
+  if (saved) {
+    if (!isCacheFresh(saved.savedAt)) refreshQuery(url);
+    return validateQuery(saved.data);
+  }
+  const generation=queryGeneration;
+  const result=await getJson<Record<string,Chapter>>(url,signal);
+  const chapters=validateQuery(result);
+  if (signal?.aborted) throw abortError();
+  await saveQuery(url,result,generation);
   if (signal?.aborted) throw abortError();
   return chapters;
 }
@@ -158,6 +190,18 @@ type SearchResponse = {
   results:Record<string,Chapter>;
   matches:Array<{reference:string;book_nr:number;chapter:number;verse:number;score?:number;occurrences?:number;terms?:string[]}>;
 };
+const reverseSearches=new Map<string,{total:number;sha?:string|null;engineVersion?:number}>();
+const MAX_SEARCH_OFFSET=10_000;
+const MAX_SEARCH_LIMIT=100;
+
+async function searchPage(url:string,signal?:AbortSignal):Promise<SearchResponse> {
+  const page=await getJson<SearchResponse>(url,signal);
+  if (!page.query || !page.results || !Array.isArray(page.matches) || !["search","reference"].includes(page.query.kind)
+    || !Number.isSafeInteger(page.query.total) || page.query.total<0 || !Number.isSafeInteger(page.query.returned)
+    || page.query.returned!==page.matches.length)
+    throw new ScriptureApiError("GetBible returned an invalid search page",502,"invalid_response");
+  return page;
+}
 
 /** Server search preserves match order; its chapter map is not the ranked result list. */
 export async function searchScripture(
@@ -165,11 +209,12 @@ export async function searchScripture(
 ):Promise<ServerSearchPage> {
   const abbr=translationId(translation),text=query.trim(),limit=options.limit ?? 25;
   if (!text || text.length>500) throw new ScriptureApiError("Enter search text of at most 500 characters",400,"invalid_search");
-  if (!Number.isInteger(offset) || offset<0 || offset>10_000 || !Number.isInteger(limit) || limit<1 || limit>100)
+  const reverse=options.sort==="canonical_desc";
+  if (!Number.isInteger(offset) || offset<0 || offset>MAX_SEARCH_OFFSET+MAX_SEARCH_LIMIT || !Number.isInteger(limit) || limit<1 || limit>MAX_SEARCH_LIMIT)
     throw new ScriptureApiError("Search pagination is outside the supported range",400,"invalid_search");
   const parameters=new URLSearchParams({
     q:text,words:options.words,match:options.match==="exact"?"whole_word":"substring",
-    case_sensitive:String(options.caseSensitive),sort:options.sort ?? "canonical",diacritics:options.diacritics ?? "fold",
+    case_sensitive:String(options.caseSensitive),sort:reverse?"canonical":options.sort ?? "canonical",diacritics:options.diacritics ?? "fold",
     limit:String(limit),offset:String(offset),
   });
   if (options.scope.startsWith("book:")) {
@@ -178,9 +223,61 @@ export async function searchScripture(
   for (const book of options.books ?? []) parameters.append("book",String(book));
   for (const excluded of options.exclude ?? []) parameters.append("exclude",excluded);
   if (options.words==="all" && options.proximity !== undefined) parameters.set("proximity",String(options.proximity));
-  const page=await getJson<SearchResponse>(`${SEARCH_ROOT}/${encodeURIComponent(abbr)}?${parameters}`,signal);
-  if (!page.query || !page.results || !Array.isArray(page.matches) || !["search","reference"].includes(page.query.kind))
-    throw new ScriptureApiError("GetBible returned an invalid search page",502,"invalid_response");
+  const endpoint=`${SEARCH_ROOT}/${encodeURIComponent(abbr)}?`;
+  let page:SearchResponse;
+  if (reverse) {
+    // The API only supports ascending canonical order. Page from its real end,
+    // keeping the cursor as the number of reverse-ordered results already read.
+    const criteria=new URLSearchParams(parameters);criteria.delete("offset");
+    const key=`${endpoint}${criteria}`;
+    let known=offset===0?undefined:reverseSearches.get(key);
+    let firstPage:SearchResponse|undefined;
+    if (!known) {
+      parameters.set("offset","0");
+      firstPage=await searchPage(`${endpoint}${parameters}`,signal);
+      if (firstPage.query.kind==="reference") {
+        page=firstPage;
+      } else {
+        known={total:firstPage.query.total,sha:firstPage.query.sha,engineVersion:firstPage.query.engine_version};
+        reverseSearches.delete(key);reverseSearches.set(key,known);
+        while (reverseSearches.size>20) reverseSearches.delete(reverseSearches.keys().next().value!);
+      }
+    }
+    if (known) {
+      if (known.total>MAX_SEARCH_OFFSET+MAX_SEARCH_LIMIT)
+        throw new ScriptureApiError("This search has too many results to reverse. Choose a Testament or book, or refine the search to 10,100 results or fewer.",400,"reverse_search_limit");
+      const end=Math.max(0,known.total-offset),start=Math.max(0,end-limit);
+      if (end===0) {
+        page={query:{kind:"search",total:known.total,returned:0,has_more:false,sha:known.sha,engine_version:known.engineVersion},results:{},matches:[]};
+      } else if (firstPage && start===0 && end===firstPage.query.returned) {
+        page=firstPage;
+      } else {
+        const serverOffset=Math.min(start,MAX_SEARCH_OFFSET);
+        parameters.set("offset",String(serverOffset));parameters.set("limit",String(end-serverOffset));
+        page=await searchPage(`${endpoint}${parameters}`,signal);
+        if (page.query.kind!=="search" || page.query.total!==known.total
+          || page.query.sha!==known.sha || page.query.engine_version!==known.engineVersion)
+          throw new ScriptureApiError("The translation changed during this search. Run your search again.",409,"search_changed");
+        const matches=page.matches.slice(start-serverOffset,end-serverOffset);
+        if (matches.length!==end-start) throw new ScriptureApiError("GetBible returned an incomplete search page. Run your search again.",502,"invalid_response");
+        page={...page,matches,query:{...page.query,returned:matches.length}};
+      }
+    } else {
+      page=firstPage!;
+    }
+  } else {
+    // A final request can include up to 100 results after offset 10,000.
+    // Expand that last page and discard any overlap when a prior page crossed
+    // the offset boundary, so every reachable result remains available.
+    const serverOffset=Math.min(offset,MAX_SEARCH_OFFSET);
+    parameters.set("offset",String(serverOffset));
+    if (offset+limit>MAX_SEARCH_OFFSET) parameters.set("limit",String(MAX_SEARCH_LIMIT));
+    page=await searchPage(`${endpoint}${parameters}`,signal);
+    if (page.query.kind==="search" && offset>serverOffset) {
+      const matches=page.matches.slice(offset-serverOffset);
+      page={...page,matches,query:{...page.query,offset,returned:matches.length}};
+    }
+  }
   const results=page.matches.map(match=>{
     const chapter=page.results[`${abbr}_${match.book_nr}_${match.chapter}`];
     const verse=chapter?.verses.find(item=>item.verse===match.verse);
@@ -193,9 +290,10 @@ export async function searchScripture(
       ...(match.terms===undefined?{}:{terms:match.terms}),
     };
   });
-  const nextCursor=page.query.kind==="search"?(page.query.offset ?? offset)+page.query.returned:results.length;
+  if (reverse) results.reverse();
+  const nextCursor=page.query.kind==="search"?(reverse?offset:page.query.offset ?? offset)+page.query.returned:results.length;
   return {
-    results,nextCursor,complete:page.query.kind==="reference" || !page.query.has_more || page.query.returned===0 || nextCursor>10_000,
+    results,nextCursor,complete:page.query.kind==="reference" || page.query.returned===0 || (reverse?nextCursor>=page.query.total:!page.query.has_more || nextCursor>=MAX_SEARCH_OFFSET+MAX_SEARCH_LIMIT),
     total:page.query.total,kind:page.query.kind,
     ...(typeof page.query.sha==="string"?{sha:page.query.sha}:{}),
     ...(page.query.engine_version===undefined?{}:{engineVersion:page.query.engine_version}),

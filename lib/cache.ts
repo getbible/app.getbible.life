@@ -11,13 +11,20 @@ type Metadata = {
   books:Record<string,HashSet>;
   chapters:Record<string,HashSet>;
   loaded:Record<string,string>;
+  loadedChecked:Record<string,number>;
   full:Record<string,string>;
   fullChecked:Record<string,number>;
   downloaded:Record<string,Translation>;
 };
 export type Result<T> = { data:T; cached:boolean; verified:boolean; persisted?:boolean };
-type Saved<T> = { data:T; persisted:boolean };
+type Saved<T> = { data:T; persisted:boolean; savedAt:number; bytes:number; sha:string };
+export type DownloadedTranslation = { abbreviation:string; name:string; savedAt:number; bytes:number; refreshing:boolean };
+const CACHED_AT = "x-getbible-cached-at";
+const CACHE_BYTES = "x-getbible-cache-bytes";
+const CACHE_SHA = "x-getbible-sha";
 const memory = new Map<string,Saved<unknown>>();
+const pending = new Map<string,{controller:AbortController;result:Promise<Result<unknown>>}>();
+const failedRefreshes = new Map<string,number>();
 function remember<T>(url:string,saved:Saved<T>):void {
   memory.delete(url);memory.set(url,saved);
   // Keep chapter reads fast without retaining every downloaded corpus in RAM.
@@ -25,7 +32,7 @@ function remember<T>(url:string,saved:Saved<T>):void {
   while (corpora.length>2) memory.delete(corpora.shift()!);
   while (memory.size>64) memory.delete(memory.keys().next().value!);
 }
-const blank = ():Metadata => ({version:3,translations:{checkedAt:0,hashes:{}},books:{},chapters:{},loaded:{},full:{},fullChecked:{},downloaded:{}});
+const blank = ():Metadata => ({version:3,translations:{checkedAt:0,hashes:{}},books:{},chapters:{},loaded:{},loadedChecked:{},full:{},fullChecked:{},downloaded:{}});
 let memoryMetadata = blank();
 
 function metadata():Metadata {
@@ -45,20 +52,36 @@ async function read<T>(url:string):Promise<Saved<T>|null> {
   try {
     const response = await (await caches.open(CACHE)).match(url);
     if (!response) return null;
-    const saved = { data:await response.json() as T, persisted:true };
+    const saved = { data:await response.json() as T, persisted:true, savedAt:Number(response.headers.get(CACHED_AT)) || 0, bytes:Number(response.headers.get(CACHE_BYTES)) || 0, sha:response.headers.get(CACHE_SHA) || "" };
     remember(url,saved);
     return saved;
   } catch { return null; }
 }
-async function write<T>(url:string,data:T,bytes?:ArrayBuffer):Promise<boolean> {
-  const saved:Saved<T> = { data, persisted:false };
+async function write<T>(url:string,data:T,bytes?:ArrayBuffer,signal?:AbortSignal,sha=""):Promise<boolean> {
+  signal?.throwIfAborted();
+  const body=bytes ?? new TextEncoder().encode(JSON.stringify(data)).buffer;
+  const saved:Saved<T> = { data, persisted:false, savedAt:Date.now(), bytes:body.byteLength, sha };
   remember(url,saved);
   try {
-    await (await caches.open(CACHE)).put(url,new Response(bytes ?? JSON.stringify(data),{
-      headers:{"content-type":"application/json"},
+    await (await caches.open(CACHE)).put(url,new Response(body,{
+      headers:{"content-type":"application/json",[CACHED_AT]:String(saved.savedAt),[CACHE_BYTES]:String(saved.bytes),[CACHE_SHA]:sha},
     }));
     saved.persisted = true;
   } catch { /* A quota or CacheStorage error must not discard a successful request. */ }
+  signal?.throwIfAborted();
+  return saved.persisted;
+}
+async function revalidated<T>(url:string,saved:Saved<T>,signal:AbortSignal):Promise<boolean> {
+  signal.throwIfAborted();
+  saved.savedAt=Date.now();
+  try {
+    const cache=await caches.open(CACHE),response=await cache.match(url);
+    if (!response || response.headers.get(CACHE_SHA)!==saved.sha) return false;
+    const headers=new Headers(response.headers);headers.set(CACHED_AT,String(saved.savedAt));
+    // Keep the exact verified source bytes, including whitespace, on a hash-only refresh.
+    await cache.put(url,new Response(response.body,{headers}));
+  } catch { /* The unchanged, previously saved body remains valid if a timestamp write fails. */ }
+  signal.throwIfAborted();
   return saved.persisted;
 }
 function cached<T>(saved:Saved<T>,verified=false):Result<T> {
@@ -74,8 +97,11 @@ function position(value:number):number {
   if (!Number.isSafeInteger(value) || value < 1) throw new Error("Invalid Scripture position");
   return value;
 }
-async function request(url:string,timeout=30_000):Promise<{bytes:ArrayBuffer;response:Response}> {
+async function request(url:string,timeout=30_000,signal?:AbortSignal):Promise<{bytes:ArrayBuffer;response:Response}> {
   const controller=new AbortController();
+  signal?.throwIfAborted();
+  const abort=()=>controller.abort();
+  signal?.addEventListener("abort",abort,{once:true});
   const timer=setTimeout(()=>controller.abort(),timeout);
   try {
     const response=await fetch(url,{cache:"no-store",headers:{accept:"application/json"},signal:controller.signal});
@@ -85,23 +111,24 @@ async function request(url:string,timeout=30_000):Promise<{bytes:ArrayBuffer;res
     }
     return {bytes:await response.arrayBuffer(),response};
   } catch(error) {
+    signal?.throwIfAborted();
     if (controller.signal.aborted) throw new Error("GetBible request timed out. Please try again.");
     throw error;
-  } finally { clearTimeout(timer); }
+  } finally { clearTimeout(timer);signal?.removeEventListener("abort",abort); }
 }
 function decode<T>(bytes:ArrayBuffer):T { return JSON.parse(new TextDecoder().decode(bytes)) as T; }
-async function network<T>(url:string):Promise<{data:T;bytes:ArrayBuffer}> {
-  const {bytes}=await request(url);
+async function network<T>(url:string,signal?:AbortSignal):Promise<{data:T;bytes:ArrayBuffer}> {
+  const {bytes}=await request(url,30_000,signal);
   return {data:decode<T>(bytes),bytes};
 }
-async function sourceHash(url:string):Promise<string> {
-  const {bytes}=await request(url,15_000);
+async function sourceHash(url:string,signal?:AbortSignal):Promise<string> {
+  const {bytes}=await request(url,15_000,signal);
   const sha=new TextDecoder().decode(bytes).trim().toLowerCase();
   if (!validSha(sha)) throw new Error("GetBible returned an invalid content hash");
   return sha;
 }
-async function verifiedDocument<T>(url:string,sha:string,timeout=30_000):Promise<{data:T;bytes:ArrayBuffer;verified:boolean}> {
-  const {bytes}=await request(url,timeout);
+async function verifiedDocument<T>(url:string,sha:string,timeout=30_000,signal?:AbortSignal):Promise<{data:T;bytes:ArrayBuffer;verified:boolean}> {
+  const {bytes}=await request(url,timeout,signal);
   let verified=false;
   if (globalThis.crypto?.subtle) {
     const digest=await globalThis.crypto.subtle.digest("SHA-1",bytes);
@@ -115,12 +142,28 @@ const hashes = <T extends {sha:string}>(record:Record<string,T>):Record<string,s
   Object.fromEntries(Object.entries(record).map(([key,value])=>[key,value.sha]));
 
 function invalidateLoaded(meta:Metadata,prefix:string):void {
-  for (const key of Object.keys(meta.loaded)) if (key.startsWith(prefix)) delete meta.loaded[key];
+  for (const key of Object.keys(meta.loaded)) if (key.startsWith(prefix)) { delete meta.loaded[key];meta.loadedChecked[key]=0; }
 }
 
-function fullTrusted(meta:Metadata,abbr:string):boolean {
+function run<T>(url:string,work:(signal:AbortSignal)=>Promise<Result<T>>):Promise<Result<T>> {
+  const existing=pending.get(url);
+  if (existing) return existing.result as Promise<Result<T>>;
+  const controller=new AbortController();
+  const result=work(controller.signal).then(value=>{failedRefreshes.delete(url);return value;}).catch(error=>{
+    if (!controller.signal.aborted) failedRefreshes.set(url,Date.now());
+    throw error;
+  }).finally(()=>{if(pending.get(url)?.result===result) pending.delete(url);});
+  pending.set(url,{controller,result});
+  return result;
+}
+function background<T>(url:string,work:()=>Promise<T>):void {
+  if (offline() || Date.now()-(failedRefreshes.get(url) || 0)<60_000) return;
+  void work().catch(()=>undefined);
+}
+
+function fullTrusted(meta:Metadata,abbr:string,saved:Saved<WholeTranslation>):boolean {
   const sha=meta.full[abbr];
-  return !!sha && validSha(sha) && fresh(meta.fullChecked[abbr] || 0) &&
+  return !!sha && validSha(sha) && saved.sha===sha && fresh(meta.fullChecked[abbr] || 0) &&
     (!meta.translations.hashes[abbr] || meta.translations.hashes[abbr] === sha);
 }
 async function savedTranslation(abbr:string):Promise<Saved<WholeTranslation>|null> {
@@ -184,49 +227,43 @@ function chaptersFromTranslation(data:WholeTranslation,book:number):Record<strin
   }]));
 }
 
-export async function translations():Promise<Result<Record<string,Translation>>> {
-  const url=`${API_ROOT}/translations.json`,meta=metadata(),saved=await read<Record<string,Translation>>(url);
-  if (saved && fresh(meta.translations.checkedAt)) return cached(saved,true);
-  if (offline()) {
-    if (saved) return cached(saved);
-    const downloaded=await downloadedTranslations();
-    if (downloaded) return downloaded;
-  }
-  try {
-    const {data,bytes}=await network<Record<string,Translation>>(url);
-    const next=metadata(),updated=hashes(data);
+function refreshTranslations():Promise<Result<Record<string,Translation>>> {
+  const url=`${API_ROOT}/translations.json`;
+  return run(url,async(signal)=>{
+    const {data,bytes}=await network<Record<string,Translation>>(url,signal);
+    const persisted=await write(url,data,bytes,signal),next=metadata(),updated=hashes(data);
     for (const [abbr,previous] of Object.entries(next.translations.hashes)) {
       if (updated[abbr]===previous) continue;
-      // Expire verification only. The old bodies remain available if refresh fails offline.
+      // Expire verification only. Old bodies remain readable during refresh.
       if (next.books[abbr]) next.books[abbr].checkedAt=0;
       for (const [key,index] of Object.entries(next.chapters)) if (key.startsWith(`${abbr}/`)) index.checkedAt=0;
       next.fullChecked[abbr]=0;
       invalidateLoaded(next,`${abbr}/`);
     }
-    next.translations={checkedAt:Date.now(),hashes:updated};
-    save(next);
-    const persisted=await write(url,data,bytes);
+    next.translations={checkedAt:Date.now(),hashes:updated};save(next);
     return {data,cached:false,verified:true,persisted};
-  } catch(error) {
-    if (saved) return cached(saved);
-    const downloaded=await downloadedTranslations();
-    if (downloaded) return downloaded;
-    throw error;
-  }
+  });
 }
 
-export async function books(translation:string):Promise<Result<Record<string,Book>>> {
-  const abbr=translationId(translation),url=`${API_ROOT}/${abbr}/books.json`;
-  const full=await savedTranslation(abbr),meta=metadata();
-  if (full && fullTrusted(meta,abbr)) return {data:booksFromTranslation(full.data),cached:true,verified:true,persisted:full.persisted};
-  const saved=await read<Record<string,Book>>(url);
-  if (saved && fresh(meta.books[abbr]?.checkedAt || 0)) return cached(saved,true);
-  if (offline()) {
-    if (full) return {data:booksFromTranslation(full.data),cached:true,verified:false,persisted:full.persisted};
-    if (saved) return cached(saved);
+export async function translations():Promise<Result<Record<string,Translation>>> {
+  const url=`${API_ROOT}/translations.json`,meta=metadata(),saved=await read<Record<string,Translation>>(url);
+  if (saved) {
+    const current=fresh(meta.translations.checkedAt);
+    if (!current) background(url,refreshTranslations);
+    return cached(saved,current);
   }
-  try {
-    const {data,bytes}=await network<Record<string,Book>>(url),next=metadata(),updated=hashes(data);
+  // A downloaded Bible contains everything required to start reading. Catalogue
+  // refresh must never delay startup, even when a connection looks online but stalls.
+  const downloaded=await downloadedTranslations();
+  if (downloaded) { background(url,refreshTranslations);return downloaded; }
+  return refreshTranslations();
+}
+
+function refreshBooks(abbr:string):Promise<Result<Record<string,Book>>> {
+  const url=`${API_ROOT}/${abbr}/books.json`;
+  return run(url,async(signal)=>{
+    const {data,bytes}=await network<Record<string,Book>>(url,signal);
+    const persisted=await write(url,data,bytes,signal),next=metadata(),updated=hashes(data);
     for (const [book,previous] of Object.entries(next.books[abbr]?.hashes || {})) {
       if (updated[book]===previous) continue;
       const key=`${abbr}/${book}`;
@@ -235,101 +272,202 @@ export async function books(translation:string):Promise<Result<Record<string,Boo
       invalidateLoaded(next,`${key}/`);
     }
     next.books[abbr]={checkedAt:Date.now(),hashes:updated};save(next);
-    const persisted=await write(url,data,bytes);
     return {data,cached:false,verified:true,persisted};
-  } catch(error) {
-    if (saved) return cached(saved);
-    if (full) return {data:booksFromTranslation(full.data),cached:true,verified:false,persisted:full.persisted};
-    throw error;
+  });
+}
+
+function refreshDownloaded(abbr:string,saved:Saved<WholeTranslation>):void {
+  const meta=metadata();
+  const catalogueChanged=!!meta.full[abbr] && (meta.full[abbr]!==saved.sha || (!!meta.translations.hashes[abbr] && meta.full[abbr]!==meta.translations.hashes[abbr]));
+  if (!fresh(meta.fullChecked[abbr] ?? saved.savedAt) || catalogueChanged) {
+    background(`${API_ROOT}/${abbr}.json`,()=>refreshFullTranslation(abbr,saved));
   }
+}
+
+export async function books(translation:string):Promise<Result<Record<string,Book>>> {
+  const abbr=translationId(translation),url=`${API_ROOT}/${abbr}/books.json`,full=await savedTranslation(abbr);
+  if (full) {
+    refreshDownloaded(abbr,full);
+    return {data:booksFromTranslation(full.data),cached:true,verified:fullTrusted(metadata(),abbr,full),persisted:full.persisted};
+  }
+  const saved=await read<Record<string,Book>>(url);
+  if (saved) {
+    const current=fresh(metadata().books[abbr]?.checkedAt ?? saved.savedAt);
+    if (!current) background(url,()=>refreshBooks(abbr));
+    return cached(saved,current);
+  }
+  return refreshBooks(abbr);
+}
+
+function refreshChapters(abbr:string,book:number):Promise<Result<Record<string,ChapterInfo>>> {
+  const key=`${abbr}/${book}`,url=`${API_ROOT}/${key}/chapters.json`;
+  return run(url,async(signal)=>{
+    const {data,bytes}=await network<Record<string,ChapterInfo>>(url,signal);
+    const persisted=await write(url,data,bytes,signal),next=metadata(),updated=hashes(data);
+    for (const [nr,previous] of Object.entries(next.chapters[key]?.hashes || {})) {
+      if (updated[nr]!==previous) {delete next.loaded[`${key}/${nr}`];next.loadedChecked[`${key}/${nr}`]=0;}
+    }
+    next.chapters[key]={checkedAt:Date.now(),hashes:updated};save(next);
+    return {data,cached:false,verified:true,persisted};
+  });
 }
 
 export async function chapters(translation:string,book:number):Promise<Result<Record<string,ChapterInfo>>> {
   const abbr=translationId(translation);position(book);
   const key=`${abbr}/${book}`,url=`${API_ROOT}/${key}/chapters.json`;
-  const full=await savedTranslation(abbr),fromFull=full && chaptersFromTranslation(full.data,book),meta=metadata();
-  if (fromFull && fullTrusted(meta,abbr)) return {data:fromFull,cached:true,verified:true,persisted:full?.persisted};
+  const full=await savedTranslation(abbr),fromFull=full && chaptersFromTranslation(full.data,book);
+  if (full && fromFull) {
+    refreshDownloaded(abbr,full);
+    return {data:fromFull,cached:true,verified:fullTrusted(metadata(),abbr,full),persisted:full.persisted};
+  }
   const saved=await read<Record<string,ChapterInfo>>(url);
-  if (saved && fresh(meta.chapters[key]?.checkedAt || 0)) return cached(saved,true);
-  if (offline()) {
-    if (fromFull) return {data:fromFull,cached:true,verified:false,persisted:full?.persisted};
-    if (saved) return cached(saved);
+  if (saved) {
+    const current=fresh(metadata().chapters[key]?.checkedAt ?? saved.savedAt);
+    if (!current) background(url,()=>refreshChapters(abbr,book));
+    return cached(saved,current);
   }
-  try {
-    const {data,bytes}=await network<Record<string,ChapterInfo>>(url),next=metadata(),updated=hashes(data);
-    for (const [nr,previous] of Object.entries(next.chapters[key]?.hashes || {})) {
-      if (updated[nr]!==previous) delete next.loaded[`${key}/${nr}`];
+  return refreshChapters(abbr,book);
+}
+
+function refreshChapter(abbr:string,book:number,nr:number,saved:Saved<Chapter>|null):Promise<Result<Chapter>> {
+  const key=`${abbr}/${book}/${nr}`,url=`${API_ROOT}/${key}.json`;
+  return run(url,async(signal)=>{
+    const sha=await sourceHash(`${API_ROOT}/${key}.sha`,signal);
+    if (saved?.persisted && saved.sha===sha && metadata().loaded[key]===sha) {
+      const persisted=await revalidated(url,saved,signal);
+      if(persisted) {
+        const next=metadata();next.loadedChecked[key]=Date.now();save(next);
+        return {data:saved.data,cached:true,verified:true,persisted};
+      }
     }
-    next.chapters[key]={checkedAt:Date.now(),hashes:updated};save(next);
-    const persisted=await write(url,data,bytes);
-    return {data,cached:false,verified:true,persisted};
-  } catch(error) {
-    if (saved) return cached(saved);
-    if (fromFull) return {data:fromFull,cached:true,verified:false,persisted:full?.persisted};
-    throw error;
-  }
+    const {data,bytes,verified}=await verifiedDocument<Chapter>(url,sha,30_000,signal);
+    if (data.abbreviation!==abbr || data.book_nr!==book || data.chapter!==nr || !Array.isArray(data.verses)) throw new Error("GetBible returned an invalid chapter document");
+    const persisted=await write(url,data,bytes,signal,verified?sha:""),next=metadata();
+    if (verified) next.loaded[key]=sha;
+    next.loadedChecked[key]=Date.now();save(next);
+    return {data,cached:false,verified,persisted};
+  });
 }
 
 export async function chapter(translation:string,book:number,nr:number):Promise<Result<Chapter>> {
   const abbr=translationId(translation);position(book);position(nr);
   const key=`${abbr}/${book}/${nr}`,url=`${API_ROOT}/${key}.json`;
   const full=await savedTranslation(abbr),fromFull=full && chapterFromTranslation(full.data,book,nr);
-  if (fromFull && fullTrusted(metadata(),abbr)) return {data:fromFull,cached:true,verified:true,persisted:full?.persisted};
+  if (full && fromFull) {
+    refreshDownloaded(abbr,full);
+    return {data:fromFull,cached:true,verified:fullTrusted(metadata(),abbr,full),persisted:full.persisted};
+  }
   const saved=await read<Chapter>(url);
-  if (offline()) {
-    if (fromFull) return {data:fromFull,cached:true,verified:false,persisted:full?.persisted};
-    if (saved) return cached(saved);
+  if (saved) {
+    const meta=metadata(),current=fresh(meta.loadedChecked[key] ?? saved.savedAt) && (!meta.loaded[key] || saved.sha===meta.loaded[key]);
+    if (!current) background(url,()=>refreshChapter(abbr,book,nr,saved));
+    return cached(saved,current && validSha(meta.loaded[key] || ""));
   }
-  try {
-    if (fromFull) {
-      const wholeHash=await sourceHash(`${API_ROOT}/${abbr}.sha`);
-      if (metadata().full[abbr] === wholeHash) {
-        const next=metadata();next.fullChecked[abbr]=Date.now();save(next);
-        return {data:fromFull,cached:true,verified:true,persisted:full?.persisted};
-      }
-    }
-    const sha=await sourceHash(`${API_ROOT}/${key}.sha`);
-    if (saved && metadata().loaded[key] === sha) return cached(saved,true);
-    const {data,bytes,verified}=await verifiedDocument<Chapter>(url,sha);
-    const persisted=await write(url,data,bytes),next=metadata();
-    if (verified) next.loaded[key]=sha;
-    save(next);
-    return {data,cached:false,verified,persisted};
-  } catch(error) {
-    if (saved) return cached(saved);
-    if (fromFull) return {data:fromFull,cached:true,verified:false,persisted:full?.persisted};
-    throw error;
-  }
+  return refreshChapter(abbr,book,nr,null);
 }
 
-/** Download and store one complete source file; never fetch chapters individually. */
-export async function fullTranslation(translation:string,expectedSha:string):Promise<Result<WholeTranslation>> {
-  const abbr=translationId(translation),url=`${API_ROOT}/${abbr}.json`,saved=await savedTranslation(abbr);
-  if (saved && validSha(expectedSha) && metadata().full[abbr] === expectedSha.toLowerCase() && fullTrusted(metadata(),abbr)) return cached(saved,true);
-  if (saved && offline()) return cached(saved);
-  try {
-    // Catalogue entries may be stale; the resource's own hash is authoritative.
-    const sha=await sourceHash(`${API_ROOT}/${abbr}.sha`);
-    if (saved && metadata().full[abbr] === sha) {
-      const next=metadata();next.fullChecked[abbr]=Date.now();save(next);
-      return cached(saved,true);
+function refreshFullTranslation(abbr:string,saved:Saved<WholeTranslation>|null):Promise<Result<WholeTranslation>> {
+  const url=`${API_ROOT}/${abbr}.json`;
+  return run(url,async(signal)=>{
+    // The resource's own hash is authoritative when catalogue data is older.
+    const sha=await sourceHash(`${API_ROOT}/${abbr}.sha`,signal);
+    if (saved?.persisted && saved.sha===sha && metadata().full[abbr]===sha) {
+      const persisted=await revalidated(url,saved,signal);
+      if(persisted) {
+        const next=metadata();next.fullChecked[abbr]=Date.now();next.translations.hashes[abbr]=sha;save(next);
+        return {data:saved.data,cached:true,verified:true,persisted};
+      }
     }
-    const {data,bytes,verified}=await verifiedDocument<WholeTranslation>(url,sha,180_000);
-    if (data.abbreviation !== abbr || !Array.isArray(data.books)) throw new Error("GetBible returned an invalid translation document");
-    const persisted=await write(url,data,bytes),next=metadata();
+    const {data,bytes,verified}=await verifiedDocument<WholeTranslation>(url,sha,180_000,signal);
+    if (data.abbreviation!==abbr || !Array.isArray(data.books)) throw new Error("GetBible returned an invalid translation document");
+    const persisted=await write(url,data,bytes,signal,verified?sha:""),next=metadata();
     next.downloaded[abbr]=translationFromDownload(data,sha);
-    if (verified) { next.full[abbr]=sha;next.fullChecked[abbr]=Date.now(); }
+    if (verified) next.full[abbr]=sha;
+    next.fullChecked[abbr]=Date.now();
+    next.translations.hashes[abbr]=sha;
     if (next.books[abbr]) next.books[abbr].checkedAt=0;
     for (const [key,value] of Object.entries(next.chapters)) if (key.startsWith(`${abbr}/`)) value.checkedAt=0;
     save(next);
     return {data,cached:false,verified,persisted};
-  } catch(error) { if (saved) return cached(saved);throw error; }
+  });
+}
+
+/** Download one complete source file. Ordinary reads always prefer this copy. */
+export async function fullTranslation(translation:string,expectedSha:string,options:{force?:boolean;signal?:AbortSignal}={}):Promise<Result<WholeTranslation>> {
+  options.signal?.throwIfAborted();
+  const abbr=translationId(translation),saved=await savedTranslation(abbr),url=`${API_ROOT}/${abbr}.json`;
+  if(saved?.persisted && !await fullTranslationAvailable(abbr)) saved.persisted=false;
+  options.signal?.throwIfAborted();
+  if (!options.force && saved && (saved.persisted || offline())) {
+    const current=fullTrusted(metadata(),abbr,saved);
+    if (validSha(expectedSha) && metadata().full[abbr]!==expectedSha.toLowerCase()) background(url,()=>refreshFullTranslation(abbr,saved));
+    else refreshDownloaded(abbr,saved);
+    return cached(saved,current);
+  }
+  const abort=()=>pending.get(url)?.controller.abort();
+  options.signal?.addEventListener("abort",abort,{once:true});
+  try { return await refreshFullTranslation(abbr,saved); }
+  catch(error) {options.signal?.throwIfAborted();if(saved && !options.force) return cached(saved);throw error;}
+  finally {options.signal?.removeEventListener("abort",abort);}
 }
 
 export async function fullTranslationAvailable(translation:string):Promise<boolean> {
-  return (await savedTranslation(translationId(translation)))?.persisted === true;
+  const abbr=translationId(translation);
+  try {return !!(await (await caches.open(CACHE)).match(`${API_ROOT}/${abbr}.json`));}
+  catch {return false;}
 }
+
+/** Inspect actual persisted corpora so evicted or session-only downloads are not listed. */
+export async function getDownloadedTranslations():Promise<DownloadedTranslation[]> {
+  const result:DownloadedTranslation[]=[],meta=metadata();
+  try {
+    const cache=await caches.open(CACHE);
+    for (const request of await cache.keys()) {
+      const match=request.url.startsWith(`${API_ROOT}/`) && request.url.slice(API_ROOT.length+1).match(/^([a-z0-9][a-z0-9_-]{0,29})\.json$/);
+      if (!match || match[1]==="translations") continue;
+      const abbreviation=match[1],response=await cache.match(request);
+      if (!response) continue;
+      let name=meta.downloaded[abbreviation]?.translation;
+      if (!name) {
+        const data=await response.clone().json() as WholeTranslation;
+        if (!Array.isArray(data.books) || data.abbreviation!==abbreviation) continue;
+        name=data.translation;
+      }
+      result.push({abbreviation,name,savedAt:Number(response.headers.get(CACHED_AT)) || meta.fullChecked[abbreviation] || 0,
+        bytes:Number(response.headers.get(CACHE_BYTES)) || (await response.arrayBuffer()).byteLength,refreshing:pending.has(request.url)});
+    }
+  } catch { /* Download management remains available if storage is denied. */ }
+  return result.sort((a,b)=>a.name.localeCompare(b.name));
+}
+
+async function stopRequests(matches:(url:string)=>boolean):Promise<void> {
+  const requests=[...pending].filter(([url])=>matches(url));
+  for (const [,request] of requests) request.controller.abort();
+  // A write already in progress must finish before deletion, otherwise it could
+  // restore a cache entry after the user explicitly removed it.
+  await Promise.allSettled(requests.map(([,request])=>request.result));
+  for (const url of failedRefreshes.keys()) if(matches(url)) failedRefreshes.delete(url);
+}
+
+/** Remove this translation's Bible data only; notes and bookmarks are independent. */
+export async function removeDownloadedTranslation(translation:string):Promise<void> {
+  const abbr=translationId(translation),root=`${API_ROOT}/${abbr}`;
+  const matches=(url:string)=>url===`${root}.json` || url.startsWith(`${root}/`);
+  await stopRequests(matches);
+  for(const url of memory.keys()) if(matches(url)) memory.delete(url);
+  try {
+    const cache=await caches.open(CACHE);
+    for(const request of await cache.keys()) if(matches(request.url)) await cache.delete(request);
+  } catch { /* Memory cleanup still works if storage is denied. */ }
+  const next=metadata();delete next.full[abbr];delete next.fullChecked[abbr];delete next.downloaded[abbr];delete next.books[abbr];
+  for(const key of Object.keys(next.chapters)) if(key.startsWith(`${abbr}/`)) delete next.chapters[key];
+  for(const key of Object.keys(next.loaded)) if(key.startsWith(`${abbr}/`)) delete next.loaded[key];
+  for(const key of Object.keys(next.loadedChecked)) if(key.startsWith(`${abbr}/`)) delete next.loadedChecked[key];
+  save(next);
+}
+
 export async function clearCache():Promise<void> {
+  await stopRequests(()=>true);
   memory.clear();memoryMetadata=blank();
   try { localStorage.removeItem(META); } catch { /* Storage may be disabled. */ }
   try { await caches.delete(CACHE); } catch { /* No persistent cache is available. */ }

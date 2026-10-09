@@ -2,10 +2,10 @@
 
 import { useEffect, useRef, useState } from "react";
 import {
-  commentsForVerse, defaultDictionary, downloadCommentary, downloadDictionary,
+  commentsForVerse, defaultDictionary,
   getCommentaryBooks, getCommentaryCatalog, getCommentaryChapter, getCommentaryMetadata,
   getDictionaryCatalog, getDictionaryMetadata, isStudyDownloaded,
-  normalizeStudyTerm, removeStudyDownload, scriptureReferenceQuery, studyTextSegments,
+  normalizeStudyTerm, isReadableScriptureReference, scriptureReferenceQuery, scriptureReferencesQuery, studyTextSegments,
   type CommentaryChapter, type CommentaryEntry, type CommentarySummary, type DictionaryCatalog,
   type DictionarySummary, type ScriptureReference, type StudyMetadata,
 } from "@/lib/study-api";
@@ -30,7 +30,6 @@ function remember(kind: Tab, language: string, id: string) {
 }
 const message = (error: unknown) => error instanceof Error ? error.message : "The study resource could not be loaded.";
 const cancelled = (error: unknown) => error instanceof Error && error.name === "AbortError";
-const formatSize = (bytes: number) => bytes >= 1_000_000 ? `${(bytes / 1_000_000).toFixed(1)} MB` : `${Math.ceil(bytes / 1_000)} KB`;
 function resourceOrder<T extends { language: string; name: string }>(resources: T[], language: string): T[] {
   const score = (item: T) => item.language === language ? 2 : item.language === "en" ? 1 : 0;
   return [...resources].sort((a, b) => score(b) - score(a) || a.name.localeCompare(b.name));
@@ -44,13 +43,16 @@ export default StudyPanel;
 
 function CitationText({ text, references, onReference }: { text: string; references?: ScriptureReference[]; onReference: (reference: string) => void }) {
   const segments = studyTextSegments(text, references);
-  const linked = new Set(segments.map((segment) => segment.reference));
-  const unlocated = (references ?? []).filter((reference) => !linked.has(reference));
+  // Keep individual passage buttons for grouped links as well as unlocated references.
+  const individuallyLinked = new Set(segments.flatMap((segment) => segment.references?.length === 1 ? segment.references : []));
+  const individualReferences = [...new Map((references ?? []).filter((reference) =>
+    isReadableScriptureReference(reference) && !individuallyLinked.has(reference)
+  ).map((reference) => [scriptureReferenceQuery(reference), reference])).values()];
   return <>
-    <div className="study-prose">{segments.map((segment, index) => segment.reference && segment.reference.chapter > 0
-      ? <button className="study-reference" type="button" key={index} onClick={() => onReference(scriptureReferenceQuery(segment.reference!))} title={`Read ${segment.reference.ref}`}>{segment.text}</button>
+    <div className="study-prose">{segments.map((segment, index) => segment.references?.length
+      ? <button className="study-reference" type="button" key={index} onClick={() => onReference(scriptureReferencesQuery(segment.references!))} title={`Read ${segment.references.map((reference) => reference.ref).join("; ")}`}>{segment.text}</button>
       : <span key={index}>{segment.text}</span>)}</div>
-    {unlocated.length ? <div className="study-citations" aria-label="Scripture references">{unlocated.filter((reference) => reference.chapter > 0).map((reference, index) => <button type="button" key={`${reference.ref}/${index}`} onClick={() => onReference(scriptureReferenceQuery(reference))}>{reference.ref}</button>)}</div> : null}
+    {individualReferences.length ? <div className="study-citations" aria-label="Scripture references">{individualReferences.map((reference) => <button type="button" key={scriptureReferenceQuery(reference)} onClick={() => onReference(scriptureReferenceQuery(reference))}>{reference.ref}</button>)}</div> : null}
   </>;
 }
 
@@ -73,12 +75,9 @@ function StudyContent({ translation, language, book, chapter, verse, word, stron
   const [commentaryResult, setCommentaryResult] = useState<{ id: string; chapter?: CommentaryChapter; introduction?: CommentaryChapter; error: string }>({ id: "", error: "" });
   const [wholeChapter, setWholeChapter] = useState(verse === undefined);
   const [resource, setResource] = useState<{ kind: Tab; id: string; metadata?: StudyMetadata; downloaded: boolean }>({ kind: tab, id: "", downloaded: false });
-  const [download, setDownload] = useState<{ kind: Tab; id: string; busy: boolean; notice: string; error: string }>({ kind: tab, id: "", busy: false, notice: "", error: "" });
-  const downloadController = useRef<AbortController | null>(null);
   const selected = tab === "dictionary" ? dictionary : commentary;
   const summary = tab === "dictionary" ? dictionaries?.find((item) => item.id === dictionary) : commentaries?.find((item) => item.id === commentary);
   const currentResource = resource.kind === tab && resource.id === selected ? resource : null;
-  const currentDownload = download.kind === tab && download.id === selected ? download : null;
   const activeStrong = normalizeStudyTerm(term) === normalizeStudyTerm(word ?? "") ? strong : EMPTY_STRONG;
   const lookupKey = JSON.stringify([normalizeStudyTerm(term), activeStrong, explicitEntry]);
   const dictionaryReady = lookup.key === lookupKey;
@@ -88,7 +87,6 @@ function StudyContent({ translation, language, book, chapter, verse, word, stron
   const definitions = currentLookup?.matches.find((match) => match.dictionary.id === dictionary)?.entries ?? [];
   const commentaryReady = commentaryResult.id === commentary;
 
-  useEffect(() => () => downloadController.current?.abort(), []);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -155,29 +153,6 @@ function StudyContent({ translation, language, book, chapter, verse, word, stron
     return () => controller.abort();
   }, [tab, selected]);
 
-  async function toggleDownload() {
-    if (!selected || !summary) return;
-    downloadController.current?.abort();
-    const controller = new AbortController();
-    downloadController.current = controller;
-    const kind = tab, id = selected;
-    setDownload({ kind, id, busy: true, notice: "", error: "" });
-    try {
-      if (currentResource?.downloaded) {
-        await removeStudyDownload(kind, id);
-        if (!controller.signal.aborted) {
-          setResource((current) => current.kind === kind && current.id === id ? { ...current, downloaded: false } : current);
-          setDownload({ kind, id, busy: false, notice: "Full offline download removed. Previously read entries may still be cached.", error: "" });
-        }
-      } else {
-        await (kind === "dictionary" ? downloadDictionary : downloadCommentary)(id, controller.signal);
-        if (!controller.signal.aborted) {
-          setResource((current) => current.kind === kind && current.id === id ? { ...current, downloaded: true } : current);
-          setDownload({ kind, id, busy: false, notice: "Complete resource saved and verified for offline reading.", error: "" });
-        }
-      }
-    } catch (error) { if (!cancelled(error)) setDownload({ kind, id, busy: false, notice: "", error: message(error) }); }
-  }
   function chooseDictionary(id: string) { manualDictionary.current = id; setDictionary(id); remember("dictionary", language, id); }
   function chooseTerm(value: string, entry: { dictionary: string; entry: string } | null = null) {
     manualDictionary.current = null; setInput(value); setTerm(value); setExplicitEntry(entry);
@@ -221,7 +196,7 @@ function StudyContent({ translation, language, book, chapter, verse, word, stron
             </>}
         </>}
       </div>
-      {selected && summary ? <footer className="study-resource-footer"><div className="study-download-row"><button type="button" disabled={currentDownload?.busy || !currentResource} onClick={() => void toggleDownload()}>{currentDownload?.busy ? "Saving…" : currentResource?.downloaded ? "Remove offline download" : `Save offline · ${formatSize(summary.bytes)}`}</button>{currentResource?.downloaded ? <span>Available offline</span> : null}</div>{currentDownload?.notice ? <p role="status">{currentDownload.notice}</p> : null}{currentDownload?.error ? <p className="study-error" role="alert">{currentDownload.error}</p> : null}<details className="study-attribution"><summary>{summary.license || "Resource attribution"} · {summary.language}</summary><p>{currentResource?.metadata?.copyright || currentResource?.metadata?.copyright_holder || summary.name}</p>{currentResource?.metadata?.distribution_notes ? <p>{currentResource.metadata.distribution_notes}</p> : null}<p>Source: {currentResource?.metadata?.source || "CrossWire SWORD"}</p></details></footer> : null}
+      {selected && summary ? <footer className="study-resource-footer">{currentResource?.downloaded ? <p className="study-saved-status">Available offline</p> : null}<details className="study-attribution"><summary>{summary.license || "Resource attribution"} · {summary.language}</summary><p>{currentResource?.metadata?.copyright || currentResource?.metadata?.copyright_holder || summary.name}</p>{currentResource?.metadata?.distribution_notes ? <p>{currentResource.metadata.distribution_notes}</p> : null}<p>Source: {currentResource?.metadata?.source || "CrossWire SWORD"}</p></details></footer> : null}
     </section>
   </div>;
 }

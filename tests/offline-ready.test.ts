@@ -35,3 +35,24 @@ test("unsupported browsers report that the interface could not be prepared",asyn
   browser(t,undefined);
   assert.equal(await prepareOfflineReader(5),false);
 });
+
+test("a cancelled download stops waiting for interface installation immediately",async(t)=>{
+  browser(t,{register:async()=>undefined,ready:new Promise(()=>undefined)});
+  const controller=new AbortController(),ready=prepareOfflineReader(10_000,controller.signal);
+  controller.abort();
+  await assert.rejects(ready,{name:"AbortError"});
+});
+
+test("offline preparation waits for an installed update rather than approving the previous shell",async(t)=>{
+  let state:ServiceWorkerState="installing",changed:(()=>void)|undefined,oldMessages=0,newMessages=0;
+  const oldWorker={postMessage() {oldMessages++;}};
+  const latestWorker={postMessage(_message:unknown,ports:MessagePort[]) {newMessages++;ports[0].postMessage({type:"getbible-offline-ready",ready:true});}};
+  const update={get state(){return state;},addEventListener(_event:string,listener:()=>void){changed=listener;},removeEventListener(){changed=undefined;}};
+  const registration:{active:typeof oldWorker|typeof latestWorker;installing:typeof update}={active:oldWorker,installing:update};
+  browser(t,{register:async()=>registration,ready:Promise.resolve(registration)});
+  const ready=prepareOfflineReader(100);
+  await new Promise<void>(resolve=>setImmediate(resolve));
+  assert.equal(oldMessages,0);assert.equal(newMessages,0);
+  registration.active=latestWorker;state="activated";changed?.();
+  assert.equal(await ready,true);assert.equal(oldMessages,0);assert.equal(newMessages,1);assert.equal(changed,undefined);
+});

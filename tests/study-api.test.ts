@@ -51,11 +51,11 @@ test("study citation links preserve every text character and prefer full referen
     { text: "John 1:1-3", ref: "John 1:1-3", osis: "John.1.1", book: 43, chapter: 1, verse: 1, verses: [1, 2, 3] },
   ]);
   assert.equal(parts.map((part) => part.text).join(""), text);
-  assert.deepEqual(parts.filter((part) => part.reference).map((part) => part.text), ["John 1:1-3", "John 1:1", "John 1:1-3"]);
+  assert.deepEqual(parts.filter((part) => part.references).map((part) => part.text), ["John 1:1-3", "John 1:1", "John 1:1-3"]);
   assert.equal(scriptureReferenceQuery({ ref: "Jean 1:1-3,6", osis: "John.1.1", book: 43, chapter: 1, verses: [6, 1, 2, 3, 2] }), "43 1:1-3,6");
   assert.equal(scriptureReferenceQuery({ ref: "John 1", osis: "John.1", book: 43, chapter: 1 }), "43 1");
   const prefixes = studyTextSegments("John 1:10; John 1:1-5; John 1:1.", [{ text: "John 1:1", ref: "John 1:1", osis: "John.1.1", book: 43, chapter: 1, verse: 1 }]);
-  assert.deepEqual(prefixes.filter((part) => part.reference).map((part) => part.text), ["John 1:1"]);
+  assert.deepEqual(prefixes.filter((part) => part.references).map((part) => part.text), ["John 1:1"]);
 });
 
 function mockCache() {
@@ -64,6 +64,7 @@ function mockCache() {
     match: async (input: RequestInfo | URL) => values.get(String(input))?.clone(),
     put: async (input: RequestInfo | URL, response: Response) => { values.set(String(input), response.clone()); },
     delete: async (input: RequestInfo | URL) => values.delete(String(input)),
+    keys: async () => [...values.keys()].map((url) => new Request(url)),
   } as unknown as Cache;
   const storage = { open: async (name: string) => { assert.equal(name, STUDY_CACHE_NAME); return cache; } } as unknown as CacheStorage;
   return { values, storage };

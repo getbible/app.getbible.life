@@ -1,0 +1,51 @@
+.download-manager {
+  display: grid;
+  gap: 12px;
+  margin: 20px 0;
+  min-width: 0;
+  padding-top: 18px;
+  border-top: 1px solid var(--border);
+}
+.download-manager header h3 { margin: 0 0 7px; font-size: 14px; font-weight: 750; }
+.download-manager header p { margin: 0 0 2px; color: var(--muted); font-size: 11px; line-height: 1.6; }
+.download-card { min-width: 0; padding: 13px; border: 1px solid var(--border); border-radius: 10px; background: var(--background); }
+.download-card-heading { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.download-card-heading h4 { margin: 0; font-size: 12px; font-weight: 700; }
+.download-count, .download-ready { display: inline-flex; align-items: center; justify-content: center; min-width: 23px; height: 23px; padding: 0 6px; border-radius: 6px; background: var(--subtle); font-size: 11px; font-weight: 700; }
+.download-translation-name { margin: 9px 0 5px; font-size: 12px; line-height: 1.5; }
+.download-meta { margin: 6px 0; color: var(--muted); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
+.download-actions { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 11px; }
+.download-manager button { min-height: 32px; padding: 6px 9px; border: 1px solid var(--border); border-radius: 6px; color: var(--foreground); background: var(--background); font-size: 10px; font-weight: 650; line-height: 1.4; cursor: pointer; }
+.download-manager button:hover:not(:disabled) { background: var(--subtle); border-color: var(--muted); }
+.download-manager button:focus-visible, .download-manager select:focus-visible, .download-manager summary:focus-visible { outline: 2px solid var(--foreground); outline-offset: 3px; }
+.download-manager button:disabled { opacity: .45; cursor: default; }
+.download-manager button.download-primary { color: var(--background); background: var(--foreground); border-color: var(--foreground); }
+.download-manager button.download-primary:hover:not(:disabled) { opacity: .8; background: var(--foreground); }
+.download-resource-picker { min-width: 0; margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--border); }
+.reader-options .download-resource-picker > summary { margin: 0; color: var(--foreground); font-size: 10px; cursor: pointer; }
+.reader-options .download-resource-picker[open] > summary { margin-bottom: 10px; }
+.download-resource-picker > summary span { margin-inline-start: 4px; color: var(--muted); }
+.download-select { display: block; margin-bottom: 5px; color: var(--muted); font-size: 10px; }
+.download-resource-picker select { display: block; width: 100%; min-width: 0; min-height: 35px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--subtle); color: var(--foreground); font-size: 11px; }
+.download-selected { display: flex; align-items: center; justify-content: space-between; gap: 7px; margin-top: 8px; }
+.download-selected button { flex-shrink: 0; }
+.download-saved-summary { margin: 12px 0 0; }
+.download-saved-list { max-height: 260px; margin: 9px 0 0; padding: 0; list-style: none; overflow-y: auto; scrollbar-width: thin; }
+.download-saved-list li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 9px 0; border-top: 1px solid var(--border); }
+.download-saved-list li > div { min-width: 0; }
+.download-saved-list strong { display: block; font-size: 11px; font-weight: 650; line-height: 1.4; overflow-wrap: anywhere; }
+.download-saved-list .download-meta { display: block; margin: 2px 0 0; }
+.download-saved-list button { flex-shrink: 0; }
+.download-progress { position: sticky; bottom: 0; z-index: 1; padding: 12px; border: 1px solid var(--border); border-radius: 8px; background: var(--subtle); box-shadow: 0 -3px 12px color-mix(in srgb, var(--foreground) 5%, transparent); }
+.download-progress > div { display: flex; align-items: center; justify-content: space-between; gap: 9px; }
+.download-progress strong { font-size: 11px; line-height: 1.5; overflow-wrap: anywhere; }
+.download-progress button { flex-shrink: 0; }
+.download-progress progress { display: block; width: 100%; height: 6px; margin-top: 10px; accent-color: var(--foreground); }
+.download-progress > span { display: block; margin-top: 6px; color: var(--muted); font-size: 10px; }
+.download-message { margin: 0; padding: 10px 12px; border-radius: 7px; background: var(--subtle); color: var(--muted); font-size: 11px; line-height: 1.6; overflow-wrap: anywhere; }
+.download-message button { margin-top: 5px; }
+.download-error { border-inline-start: 3px solid #ba5555; color: var(--foreground); }
+@media (max-width: 360px) {
+  .download-card { padding: 10px; }
+  .download-actions > button { flex: 1 1 auto; }
+}

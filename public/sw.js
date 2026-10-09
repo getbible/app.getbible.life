@@ -11,9 +11,17 @@ const CACHE_PREFIX = "getbible-shell-";
 const CACHE_NAME = `${CACHE_PREFIX}${manifest.version}`;
 const ASSETS = new Set(manifest.assets.filter((path) => typeof path === "string" && path.startsWith("/") && !path.startsWith("//") && !/[?#]/.test(path)));
 const ORIGIN = self.location.origin;
+const CACHED_AT = "x-getbible-cached-at";
+const MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
 
 function cacheable(response) {
   return response.ok && !response.redirected && response.type !== "opaque";
+}
+
+function stamped(response) {
+  const headers = new Headers(response.headers);
+  headers.set(CACHED_AT, String(Date.now()));
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 function isReaderPath(path) {
@@ -61,21 +69,30 @@ self.addEventListener("install", (event) => {
       await Promise.all([...ASSETS].map(async (path) => {
         const response = await fetch(new Request(new URL(path, ORIGIN), { cache: "reload", credentials: "same-origin" }));
         if (!cacheable(response) || (path === "/" && !await compatibleShell(response))) throw new Error(`Cannot cache reader asset: ${path}`);
-        await cache.put(path, response);
+        await cache.put(path, stamped(response));
       }));
     } catch (error) {
       await caches.delete(CACHE_NAME);
       throw error;
     }
-    // Updates wait until existing tabs close, so each tab retains matching HTML
-    // and compiled assets. Translation and study-resource caches are independent.
+    // A completed release can take over immediately. Older compiled assets stay
+    // available below so already open tabs can still load their own lazy chunks.
+    await self.skipWaiting();
   })());
 });
 
 self.addEventListener("activate", (event) => {
   event.waitUntil((async () => {
     const names = await caches.keys();
-    await Promise.all(names.filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME).map((name) => caches.delete(name)));
+    for (const name of names.filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME)) {
+      const cache = await caches.open(name);
+      const shell = await cache.match("/");
+      if (!shell) { await caches.delete(name); continue; }
+      const savedAt = Number(shell.headers.get(CACHED_AT));
+      if (savedAt > 0 && Date.now() - savedAt >= MAX_AGE_MS) await caches.delete(name);
+      else if (!savedAt) await cache.put("/", stamped(shell));
+    }
+    await self.clients.claim();
   })());
 });
 
@@ -103,7 +120,7 @@ async function navigation(request) {
     if (response.status < 500) {
       const url = new URL(request.url);
       if (url.pathname === "/" && await compatibleShell(response)) {
-        try { await cache.put("/", response.clone()); } catch { /* A full cache must not prevent online reading. */ }
+        try { await cache.put("/", stamped(response.clone())); } catch { /* A full cache must not prevent online reading. */ }
       }
       return response;
     }
@@ -122,9 +139,15 @@ async function asset(request, pathname) {
   try { cache = await caches.open(CACHE_NAME); } catch { return fetch(request); }
   const saved = await cache.match(pathname);
   if (saved) return saved;
+  // Older open tabs may ask for a chunk that does not belong to this release.
+  // Retained shell caches are the only fallback; API caches remain independent.
+  for (const name of (await caches.keys()).filter((name) => name.startsWith(CACHE_PREFIX) && name !== CACHE_NAME)) {
+    const previous = await (await caches.open(name)).match(pathname);
+    if (previous) return previous;
+  }
   const response = await fetch(request);
-  if (cacheable(response)) {
-    try { await cache.put(pathname, response.clone()); } catch { /* Continue online when device storage is full. */ }
+  if (ASSETS.has(pathname) && cacheable(response)) {
+    try { await cache.put(pathname, stamped(response.clone())); } catch { /* Continue online when device storage is full. */ }
   }
   return response;
 }
@@ -135,7 +158,7 @@ self.addEventListener("fetch", (event) => {
   if (request.method !== "GET" || url.origin !== ORIGIN || request.headers.has("range") || request.headers.has("authorization")) return;
   if (request.mode === "navigate" && isReaderPath(url.pathname)) {
     event.respondWith(navigation(request));
-  } else if (url.pathname !== "/" && ASSETS.has(url.pathname) && !url.search) {
+  } else if (url.pathname !== "/" && (ASSETS.has(url.pathname) || /^\/assets\/[^?#]+\.(?:m?js|css|woff2?)$/.test(url.pathname)) && !url.search) {
     event.respondWith(asset(request, url.pathname));
   }
 });

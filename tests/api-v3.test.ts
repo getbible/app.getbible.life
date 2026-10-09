@@ -5,6 +5,7 @@ import { API_ROOT } from "../lib/getbible.ts";
 import type { Chapter, WholeTranslation } from "../lib/getbible.ts";
 import { books, chapter, chapters, clearCache, fullTranslation, fullTranslationAvailable, translations } from "../lib/cache.ts";
 import { clearQueryCache, coordinateReference, normalizeScriptureReference, queryScripture, searchScripture, ScriptureApiError } from "../lib/scripture-api.ts";
+import { CACHE_MAX_AGE_MS } from "../lib/cache-policy.ts";
 
 const verse = {
   chapter:3,verse:16,name:"John 3:16",text:"For God  so loved the world.\n",
@@ -60,7 +61,7 @@ test("server search maps filters and follows match ordering rather than verse ar
   const chapterData={...passage,verses:[{...verse,verse:19,text:"Second ranked result"},{...verse,verse:16,text:"First ranked result"}]};
   const env=await environment(t,()=>json({
     query:{kind:"search",total:80,returned:2,offset:25,limit:25,has_more:true,sha,engine_version:5},
-    results:{kjv_43_3:chapterData},matches:[{reference:"John 3:16",book_nr:43,chapter:3,verse:16,score:8},{reference:"John 3:19",book_nr:43,chapter:3,verse:19,score:2}],
+    results:{kjv_43_3:chapterData},matches:[{reference:"John 3:16",book_nr:43,chapter:3,verse:16,score:8,occurrences:3,terms:["faith","hope"]},{reference:"John 3:19",book_nr:43,chapter:3,verse:19,score:2}],
   }));
   const result=await searchScripture("KJV","faith & hope",{...options,scope:"nt",sort:"relevance",books:[43,"1 John"],exclude:["darkness","death"],proximity:5},25);
   const url=new URL(env.calls[0]);
@@ -71,7 +72,70 @@ test("server search maps filters and follows match ordering rather than verse ar
   assert.equal(url.searchParams.get("proximity"),"5");assert.equal(url.searchParams.get("offset"),"25");
   assert.deepEqual(result.results.map(item=>item.text),["First ranked result","Second ranked result"]);
   assert.deepEqual(result.results[0].verseData.tokens,verse.tokens);
+  assert.equal(result.results[0].occurrences,3);assert.deepEqual(result.results[0].terms,["faith","hope"]);assert.equal(result.results[0].score,8);
   assert.equal(result.nextCursor,27);assert.equal(result.total,80);assert.equal(result.complete,false);assert.equal(result.sha,sha);
+});
+
+test("reverse search starts at the true last match and pages backward without skipping or repeating verses",async(t)=>{
+  const total=58;
+  const env=await environment(t,(raw)=>{
+    const url=new URL(raw),offset=Number(url.searchParams.get("offset")),limit=Number(url.searchParams.get("limit"));
+    assert.equal(url.searchParams.get("sort"),"canonical");
+    const numbers=Array.from({length:Math.min(limit,total-offset)},(_,index)=>offset+index+1);
+    return json({query:{kind:"search",total,returned:numbers.length,offset,has_more:offset+numbers.length<total,sha,engine_version:5},
+      results:{kjv_43_3:{...passage,verses:numbers.map(number=>({...verse,verse:number,text:`Verse ${number}`}))}},
+      matches:numbers.map(number=>({book_nr:43,chapter:3,verse:number,reference:`John 3:${number}`}))});
+  });
+  const reverse={...options,sort:"canonical_desc" as const,limit:25};
+  const first=await searchScripture("kjv","hope",reverse);
+  const second=await searchScripture("kjv","hope",reverse,first.nextCursor);
+  const third=await searchScripture("kjv","hope",reverse,second.nextCursor);
+  assert.deepEqual([...first.results,...second.results,...third.results].map(item=>item.verse),Array.from({length:total},(_,index)=>total-index));
+  assert.deepEqual(env.calls.map(raw=>[new URL(raw).searchParams.get("offset"),new URL(raw).searchParams.get("limit")]),[["0","25"],["33","25"],["8","25"],["0","8"]]);
+  assert.equal(first.complete,false);assert.equal(second.complete,false);assert.equal(third.complete,true);assert.equal(third.nextCursor,total);
+});
+
+test("reverse search respects the API offset boundary and refuses inaccessible tails",async(t)=>{
+  let total=10_030;
+  const env=await environment(t,(raw)=>{
+    const url=new URL(raw),offset=Number(url.searchParams.get("offset")),limit=Number(url.searchParams.get("limit"));
+    assert.ok(offset<=10_000);assert.ok(limit<=100);
+    const numbers=Array.from({length:Math.min(limit,total-offset)},(_,index)=>offset+index+1);
+    return json({query:{kind:"search",total,returned:numbers.length,offset,has_more:offset+numbers.length<total,sha},
+      results:{kjv_43_3:{...passage,verses:numbers.map(number=>({...verse,verse:number}))}},
+      matches:numbers.map(number=>({book_nr:43,chapter:3,verse:number,reference:`John 3:${number}`}))});
+  });
+  const result=await searchScripture("kjv","faith",{...options,sort:"canonical_desc"});
+  assert.equal(result.results[0].verse,total);assert.equal(result.results.at(-1)?.verse,total-24);
+  assert.equal(new URL(env.calls[1]).searchParams.get("offset"),"10000");assert.equal(new URL(env.calls[1]).searchParams.get("limit"),"30");
+  total=10_101;
+  await assert.rejects(searchScripture("kjv","faith",{...options,sort:"canonical_desc"}),error=>error instanceof ScriptureApiError && error.code==="reverse_search_limit");
+});
+
+test("reverse search rejects a source change between its count and requested page",async(t)=>{
+  let request=0;
+  await environment(t,(raw)=>{
+    const url=new URL(raw),offset=Number(url.searchParams.get("offset"));request+=1;
+    return json({query:{kind:"search",total:50,returned:1,offset,has_more:true,sha:request===1?sha:"changed"},results:{kjv_43_3:passage},matches:[{book_nr:43,chapter:3,verse:16,reference:"John 3:16"}]});
+  });
+  await assert.rejects(searchScripture("kjv","hope",{...options,sort:"canonical_desc"}),error=>error instanceof ScriptureApiError && error.code==="search_changed");
+});
+
+test("forward search reaches every API-accessible result across the offset boundary without overlap",async(t)=>{
+  const total=20_000;
+  const env=await environment(t,(raw)=>{
+    const url=new URL(raw),offset=Number(url.searchParams.get("offset")),limit=Number(url.searchParams.get("limit"));
+    assert.ok(offset<=10_000);assert.ok(limit<=100);
+    const numbers=Array.from({length:limit},(_,index)=>offset+index+1);
+    return json({query:{kind:"search",total,returned:numbers.length,offset,has_more:true,sha},
+      results:{kjv_43_3:{...passage,verses:numbers.map(number=>({...verse,verse:number}))}},
+      matches:numbers.map(number=>({book_nr:43,chapter:3,verse:number,reference:`John 3:${number}`}))});
+  });
+  const first=await searchScripture("kjv","faith",options,9_990);
+  const last=await searchScripture("kjv","faith",options,first.nextCursor);
+  assert.deepEqual([...first.results,...last.results].map(item=>item.verse),Array.from({length:110},(_,index)=>9_991+index));
+  assert.equal(first.complete,false);assert.equal(last.complete,true);assert.equal(last.nextCursor,10_100);assert.equal(last.total,total);
+  assert.deepEqual(env.calls.map(raw=>new URL(raw).searchParams.get("offset")),["9990","10000"]);
 });
 
 test("reference-kind search has no full-text pagination or scoring fields",async(t)=>{
@@ -108,22 +172,42 @@ test("source OSIS references normalize aliases, ranges and chains without changi
   assert.throws(()=>normalizeScriptureReference("John.3.16-John.4.2"),(error:unknown)=>error instanceof ScriptureApiError && error.code==="unsupported_reference");
 });
 
-test("cached query passages cover network failures and server outages but never replace API errors or cancellations",async(t)=>{
-  let state:"online"|"offline"|"server"|"missing"|"limited"="online";
-  await environment(t,()=>{
-    if (state==="offline") throw new Error("Offline");
-    if (state==="server") return json({detail:"Service unavailable",code:"busy"},503);
-    if (state==="missing") return json({detail:"Reference unavailable",code:"reference_not_found"},404);
-    if (state==="limited") return json({detail:"Rate limited",code:"rate_limited"},429);
-    return json({kjv_43_3:passage});
-  });
+test("query passages use a timestamped cache immediately online and offline without unnecessary network checks",async(t)=>{
+  const env=await environment(t,()=>json({kjv_43_3:passage}));
   await queryScripture("kjv","John3:16");
-  state="offline";assert.deepEqual(await queryScripture("kjv","John3:16"),[passage]);
-  state="server";assert.deepEqual(await queryScripture("kjv","John3:16"),[passage]);
-  state="missing";await assert.rejects(queryScripture("kjv","John3:16"),(error:unknown)=>error instanceof ScriptureApiError && error.status===404);
-  state="limited";await assert.rejects(queryScripture("kjv","John3:16"),(error:unknown)=>error instanceof ScriptureApiError && error.status===429);
+  assert.deepEqual(await queryScripture("kjv","John3:16"),[passage]);
+  assert.equal(env.calls.length,1);
+  const saved=env.responses.get(env.calls[0]);assert.ok(Number(saved?.headers.get("x-getbible-cached-at"))>0);
+  globalThis.fetch=async()=>{throw new Error("Offline");};
+  assert.deepEqual(await queryScripture("kjv","John3:16"),[passage]);
   const controller=new AbortController();controller.abort();
   await assert.rejects(queryScripture("kjv","John3:16",controller.signal),{name:"AbortError"});
+});
+
+test("expired query passages remain readable while one background refresh replaces the saved data",async(t)=>{
+  const originalNow=Date.now;let now=originalNow();Date.now=()=>now;t.after(()=>{Date.now=originalNow;});
+  let finish:((response:Response)=>void)|undefined;
+  const updated={...passage,name:"Updated John 3"};
+  const env=await environment(t,()=>finish===undefined?json({kjv_43_3:passage}):new Promise(resolve=>{finish=resolve;}));
+  await queryScripture("kjv","John3:16");
+  now+=CACHE_MAX_AGE_MS;finish=()=>{};
+  assert.deepEqual(await queryScripture("kjv","John3:16"),[passage]);
+  assert.deepEqual(await queryScripture("kjv","John3:16"),[passage]);
+  assert.equal(env.calls.length,2);
+  finish!(json({kjv_43_3:updated}));
+  await new Promise(resolve=>setTimeout(resolve,0));
+  assert.deepEqual(await queryScripture("kjv","John3:16"),[updated]);
+  assert.equal(env.calls.length,2);
+});
+
+test("clearing query caches during a refresh does not restore removed entries",async(t)=>{
+  const originalNow=Date.now;let now=originalNow();Date.now=()=>now;t.after(()=>{Date.now=originalNow;});
+  let finish:((response:Response)=>void)|undefined;
+  const env=await environment(t,()=>finish===undefined?json({kjv_43_3:passage}):new Promise(resolve=>{finish=resolve;}));
+  await queryScripture("kjv","John3:16");now+=CACHE_MAX_AGE_MS;finish=()=>{};
+  await queryScripture("kjv","John3:16");await clearQueryCache();
+  finish!(json({kjv_43_3:passage}));await new Promise(resolve=>setTimeout(resolve,0));
+  assert.equal(env.responses.size,0);
 });
 
 test("API problem responses expose status and retry interval without fallback passages",async(t)=>{
@@ -245,41 +329,4 @@ test("clearing v3 API data keeps personal data and the separate legacy cache nam
   await clearCache();
   assert.equal(env.items.get("getbible-reader:notes:v1"),"personal notes");assert.equal(env.items.get("getbible-reader:meta:v1"),"v2 cache metadata");
   assert.deepEqual(env.cacheDeletes,["getbible-reader-api-v3"]);
-});
-
-test("changed translation and book hashes refresh child navigation indexes without discarding offline bodies",async(t)=>{
-  let revision=1,offline=false;
-  const succeeded:string[]=[];
-  const digest=(value:number)=>String(value).repeat(40);
-  const env=await environment(t,(url)=>{
-    if (offline) throw new Error("Offline");
-    succeeded.push(url);
-    if (url.endsWith("/translations.json")) return json({kjv:{translation:"King James Version",abbreviation:"kjv",lang:"en",language:"English",direction:"LTR",sha:digest(revision)}});
-    if (url.endsWith("/books.json")) return json({43:{nr:43,name:"John",direction:"LTR",sha:digest(revision)},45:{nr:45,name:"Romans",direction:"LTR",sha:digest(9)}});
-    if (url.endsWith("/43/chapters.json")) return json(Object.fromEntries(Array.from({length:revision},(_,index)=>[String(index+1),{chapter:index+1,name:`John ${index+1}`,sha:digest(index+1)}])));
-    if (url.endsWith("/45/chapters.json")) return json({1:{chapter:1,name:"Romans 1",sha:digest(9)}});
-    throw new Error(`Unexpected request ${url}`);
-  });
-  await translations();await books("kjv");await chapters("kjv",43);await chapters("kjv",45);
-  const expire=(change:(meta:Record<string,unknown>)=>void)=>{
-    const meta=JSON.parse(env.items.get("getbible-reader:meta:api-v3")!);change(meta);
-    env.items.set("getbible-reader:meta:api-v3",JSON.stringify(meta));
-  };
-  expire((meta)=>{(meta.translations as {checkedAt:number}).checkedAt=0;});
-  revision=2;await translations();
-  // The successful parent refresh forces child refresh, but an offline failure keeps their saved bodies.
-  offline=true;
-  const offlineBooks=await books("kjv"),offlineChapters=await chapters("kjv",43);
-  assert.equal(offlineBooks.cached,true);assert.equal(offlineBooks.verified,false);
-  assert.deepEqual(Object.keys(offlineChapters.data),["1"]);assert.equal(offlineChapters.verified,false);
-  offline=false;
-  await books("kjv");assert.deepEqual(Object.keys((await chapters("kjv",43)).data),["1","2"]);await chapters("kjv",45);
-  // A later book-only hash change expires John's chapter index while Romans stays fresh.
-  expire((meta)=>{(meta.books as Record<string,{checkedAt:number}>).kjv.checkedAt=0;meta.loaded={"kjv/43/1":digest(1),"kjv/45/1":digest(9)};});
-  revision=3;await books("kjv");
-  const verification=JSON.parse(env.items.get("getbible-reader:meta:api-v3")!);
-  assert.equal(verification.loaded["kjv/43/1"],undefined);assert.equal(verification.loaded["kjv/45/1"],digest(9));
-  assert.deepEqual(Object.keys((await chapters("kjv",43)).data),["1","2","3"]);await chapters("kjv",45);
-  assert.equal(succeeded.filter(url=>url.endsWith("/43/chapters.json")).length,3);
-  assert.equal(succeeded.filter(url=>url.endsWith("/45/chapters.json")).length,2);
 });
