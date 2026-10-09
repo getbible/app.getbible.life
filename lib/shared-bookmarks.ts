@@ -30,14 +30,6 @@ export interface BookmarkGroupMigration {
   colorIdMap: Record<string, string>;
 }
 
-export interface BookmarkMigrationPreview {
-  matchingGroups: number;
-  mergedGroups: number;
-  retainedGroups: number;
-  addedGroups: number;
-  matches: Array<{ topicId: string; colorId: string; mergedColorIds: string[] }>;
-}
-
 export interface BookmarkDisplayRow {
   marking: Marking;
   /** All records represented by this row, for an explicit row removal. */
@@ -192,27 +184,10 @@ function groupPlan(colors: MarkingColor[], catalog: BookmarkGroupCatalog, langua
     }
     survivors.set(topic.id, next);
   }
-  return { topics, groups, topicByColor, survivors };
+  return { topicByColor, survivors };
 }
 
-/** Describe the migration without changing local state or accepting it implicitly. */
-export function bookmarkMigrationPreview(colors: MarkingColor[], catalog: BookmarkGroupCatalog, language: string): BookmarkMigrationPreview {
-  const plan = groupPlan(colors, catalog, language);
-  const matches = [...plan.groups].map(([topicId, associated]) => ({
-    topicId,
-    colorId: plan.survivors.get(topicId)!.id,
-    mergedColorIds: associated.filter((color) => color.id !== plan.survivors.get(topicId)!.id).map((color) => color.id),
-  }));
-  return {
-    matchingGroups: plan.topicByColor.size,
-    mergedGroups: matches.reduce((count, match) => count + match.mergedColorIds.length, 0),
-    retainedGroups: colors.length - plan.topicByColor.size,
-    addedGroups: plan.topics.length - plan.groups.size,
-    matches,
-  };
-}
-
-/** Called only after a user's migration choice or their explicit download action. */
+/** Reconcile topics automatically on startup or download; safe to repeat without importing verses. */
 export function migrateBookmarkGroups(colors: MarkingColor[], markings: Marking[], catalog: BookmarkGroupCatalog, language: string): BookmarkGroupMigration {
   const plan = groupPlan(colors, catalog, language);
   const colorIdMap: Record<string, string> = Object.create(null);

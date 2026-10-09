@@ -1683,93 +1683,6 @@ summary:focus-visible {
   gap: 5px;
 }
 
-.selection-active-group {
-  display: flex;
-  max-width: 190px;
-  height: 34px;
-  align-items: center;
-  gap: 6px;
-  padding: 0 10px;
-  border: 1px solid color-mix(in srgb, var(--foreground) 17%, transparent);
-  border-radius: 8px;
-  background: color-mix(in srgb, var(--background) 90%, transparent);
-  color: var(--foreground);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 700;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 7%);
-  transition: border-color 120ms ease, transform 120ms ease, box-shadow 120ms ease;
-}
-
-.selection-active-group:hover {
-  border-color: color-mix(in srgb, var(--foreground) 38%, transparent);
-  box-shadow: 0 4px 12px rgb(0 0 0 / 10%);
-  transform: translateY(-1px);
-}
-
-.selection-active-group i {
-  width: 13px;
-  height: 13px;
-  flex: 0 0 auto;
-  border: 1px solid rgb(0 0 0 / 18%);
-  border-radius: 50%;
-}
-
-.selection-active-group span {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.selection-group-picker {
-  position: relative;
-  display: flex;
-  height: 34px;
-  align-items: center;
-}
-
-.selection-group-picker svg {
-  position: absolute;
-  z-index: 1;
-  inset-inline-start: 9px;
-  width: 15px;
-  height: 15px;
-  fill: currentColor;
-  opacity: 0.58;
-  pointer-events: none;
-}
-
-.selection-group-picker select {
-  width: min(178px, 34vw);
-  height: 34px;
-  padding-block: 0;
-  padding-inline: 30px 28px;
-  border: 1px solid color-mix(in srgb, var(--foreground) 17%, transparent);
-  border-radius: 8px;
-  background: var(--background);
-  color: var(--foreground);
-  cursor: pointer;
-  font-size: 10px;
-  font-weight: 650;
-  box-shadow: 0 1px 2px rgb(0 0 0 / 7%);
-}
-
-.selection-group-picker select option {
-  background: var(--background);
-  color: var(--foreground);
-}
-
-.selection-color {
-  position: relative;
-  width: 22px;
-  height: 22px;
-  padding: 0;
-  border: 1px solid rgb(0 0 0 / 22%);
-  border-radius: 50%;
-  cursor: pointer;
-}
-
-.selection-color::after,
 .color-swatch::after {
   position: absolute;
   z-index: 80;
@@ -1790,38 +1703,18 @@ summary:focus-visible {
   white-space: nowrap;
 }
 
-.selection-color:hover::after,
-.selection-color:focus-visible::after,
 .color-swatch:hover::after,
 .color-swatch:focus-visible::after {
   visibility: visible;
   opacity: 1;
 }
 
-.selection-none {
-  display: flex;
-  height: 34px;
-  align-items: center;
-  gap: 5px;
-  padding: 0 8px;
-  border: 1px solid transparent;
-  border-radius: 8px;
-  background: transparent;
-  color: var(--muted);
-  cursor: pointer;
-  font-size: 9px;
-  font-weight: 700;
-  transition: background 120ms ease, color 120ms ease;
-}
-
-.selection-none:hover,
 .add-note-from-palette:hover,
 .cancel-selection:hover {
   background: color-mix(in srgb, var(--foreground) 8%, transparent);
   color: var(--foreground);
 }
 
-.selection-none svg,
 .add-note-from-palette svg,
 .cancel-selection svg {
   width: 16px;
@@ -2018,22 +1911,12 @@ summary:focus-visible {
     height: 44px;
   }
 
-  .selection-color {
-    width: 36px;
-    min-width: 36px;
-    height: 36px;
-  }
-
-  .selection-none,
-  .selection-active-group,
-  .selection-group-picker select,
   .add-note-from-palette,
   .cancel-selection {
     min-width: 44px;
     height: 40px;
   }
 
-  .selection-none,
   .add-note-from-palette {
     justify-content: center;
   }
@@ -2088,8 +1971,6 @@ summary:focus-visible {
   .drawer-scrim,
   .menu-button span,
   .selection-toolbar,
-  .selection-active-group,
-  .selection-none,
   .add-note-from-palette,
   .cancel-selection,
   .inline-note,
@@ -2098,7 +1979,6 @@ summary:focus-visible {
     animation: none;
   }
 }
-
 
 .global-bookmark-controls {
   margin: 12px 0 20px;
@@ -2140,30 +2020,6 @@ summary:focus-visible {
   line-height: 1;
   vertical-align: middle;
 }
-.bookmark-migration-backdrop {
-  position: fixed;
-  inset: 0;
-  z-index: 100;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: 20px;
-  background: rgb(0 0 0 / 35%);
-}
-.bookmark-migration {
-  width: min(100%, 480px);
-  max-height: 85vh;
-  overflow: auto;
-  padding: 24px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  background: var(--background);
-  color: var(--foreground);
-  font-size: 14px;
-  line-height: 1.65;
-  box-shadow: 0 16px 60px rgb(0 0 0 / 15%);
-}
-.bookmark-migration h2 { margin: 0; font-size: 18px; font-weight: 600; line-height: 1.4; }
 .verses > li.daily-verse-highlight {
   background-color: color-mix(in srgb, #68c4ff 16%, transparent);
   box-shadow: inset 3px 0 #2e9eff;
@@ -2175,3 +2031,13 @@ summary:focus-visible {
 }
 .daily-verse-highlight > .verse-number { color: var(--foreground); text-decoration: underline; text-decoration-color: #2e9eff; }
 .verification-info a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }
+
+.verse-bookmark-trigger { display:inline-flex; align-items:center; justify-content:center; gap:5px; min-width:38px; min-height:32px; margin-inline-start:6px; padding:3px 6px; border:1px solid transparent; border-radius:6px; background:color-mix(in srgb, var(--background) 65%, transparent); color:var(--muted); font:700 16px/1 var(--font-geist-sans),Arial,sans-serif; vertical-align:middle; cursor:pointer; user-select:none; }
+.verse-bookmark-trigger:hover,.verse-bookmark-trigger[aria-expanded="true"] { color:var(--foreground); border-color:var(--border); background:var(--subtle); }
+.verse-bookmark-trigger:focus-visible { outline:2px solid var(--foreground); outline-offset:2px; }
+.verse-bookmark-trigger svg { width:12px; height:15px; fill:none; stroke:currentColor; stroke-width:1.6; }
+.verse-bookmark-colors { display:inline-flex; align-items:center; gap:2px; }
+.verse-bookmark-colors i { display:block; width:8px; height:8px; border-radius:50%; box-shadow:0 0 0 1px rgb(0 0 0 / .12); }
+.verse-bookmark-colors small { font-size:10px; font-weight:500; }
+@media (pointer:coarse) { .verse-bookmark-trigger { min-width:44px; min-height:44px; } }
+@media print { .verse-bookmark-trigger,.bookmark-menu { display:none !important; } }

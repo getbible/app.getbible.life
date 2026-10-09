@@ -200,6 +200,23 @@ export const ENGLISH_UI_MESSAGES = {
   markdownCreated: "Markdown file created.",
   poweredByApis: "Powered by {getBible} APIs.",
   getBibleSlogan: "The Word for the world!",
+  verseActions: "Notes and commentary for {reference}",
+  commentary: "Commentary",
+  verseBookmarks: "Bookmarks for {reference}",
+  selectedText: "Selected text",
+  noVerseBookmarks: "No bookmarks yet.",
+  addAnotherTopic: "Add another topic",
+  recentTopics: "Recent topics",
+  allTopics: "All topics",
+  findTopic: "Find a topic",
+  noMatchingTopics: "No matching topics.",
+  allTopicsAssigned: "All topics are already added.",
+  openBookmarkTopic: "Open {topic} in Study",
+  removePersonalBookmark: "Remove personal bookmark from {topic}",
+  removeGlobalBookmark: "Remove downloaded bookmark from {topic}",
+  globalBookmark: "Downloaded bookmark",
+  manageTopics: "Create or manage topics",
+  returnToVerse: "Return to {reference}",
 } as const;
 
 export type UiMessageKey = keyof typeof ENGLISH_UI_MESSAGES;
