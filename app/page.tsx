@@ -44,12 +44,11 @@ import {
   mergeMarkings,
   parseMarkingsBackup,
   markingMatchesPassage,
-  textSelectionHasMarking,
+  bookmarkAssignments,
+  addBookmarkMembership,
+  removeBookmarkMembership,
   translucentColor,
   wholeVerseMarking,
-  personalWholeVerseMarking,
-  withoutTextSelectionMarkings,
-  withoutWholeVerseMarking,
   isSharedBookmarkMarking,
 } from "../lib/markings";
 import { readBookmarkState, writeBookmarkState } from "../lib/bookmark-storage";
@@ -64,10 +63,11 @@ import { createUiTranslator, loadUiMessages, uiLocale, type UiMessageKey } from 
 import { floatingToolbarPosition, type FloatingRect, type FloatingToolbarPosition } from "../lib/floating-toolbar";
 
 import { clearStudyCache, getDictionaryCatalog, getBookmarkAll, getBookmarkTopic, downloadBookmarkCatalog, type BookmarkAll } from "../lib/study-api";
-import { bookmarkDefaultColors, bookmarkMigrationPreview, migrateBookmarkGroups, importBookmarkCatalog, importBookmarkTopicIntoGroups, removeGlobalBookmarkMarkings, type BookmarkGroupMigration, bookmarkDisplayRows } from "../lib/shared-bookmarks";
+import { bookmarkDefaultColors, migrateBookmarkGroups, importBookmarkCatalog, importBookmarkTopicIntoGroups, removeGlobalBookmarkMarkings, type BookmarkGroupMigration, bookmarkDisplayRows } from "../lib/shared-bookmarks";
 import { prewarmDictionaryLookup } from "../lib/dictionary-lookup";
 import { clearQueryCache, queryScripture, searchScripture } from "../lib/scripture-api";
 import StudyPanel from "./components/StudyPanel";
+import { BookmarkMenu } from "./components/BookmarkMenu";
 import { OfflineShell } from "./components/OfflineShell";
 import { InfrastructureCredit } from "./components/InfrastructureCredit";
 import { ReferenceModal } from "./components/ReferenceModal";
@@ -82,6 +82,7 @@ const TEXT_SIZE = "getbible-reader:size:v1";
 const MARKINGS = "getbible-reader:markings:v1";
 const MARKING_COLORS = "getbible-reader:marking-colors:v1";
 const ACTIVE_COLOR = "getbible-reader:active-color:v1";
+const RECENT_TOPICS = "getbible-reader:recent-topics:v1";
 
 const READER_FONT = "getbible-reader:font:v1";
 const LIGHT_PALETTE = "getbible-reader:light-palette:v1";
@@ -96,18 +97,17 @@ type Drawer = "reader" | "markings" | null;
 type StudyTab = "markings" | "notes";
 type InfoModal = "translation" | "sync" | null;
 
-interface TextSelection {
-  verse: number;
-  start: number;
-  end: number;
-  text: string;
-  reference: string;
-}
-
 interface WholeVerseSelection {
   verse: number;
   text: string;
   reference: string;
+}
+
+interface BookmarkTarget extends WholeVerseSelection {
+  passage: Passage;
+  start: number | null;
+  end: number | null;
+  anchor: HTMLElement;
 }
 
 interface NoteEditor {
@@ -116,10 +116,6 @@ interface NoteEditor {
   reference: string;
   text: string;
 }
-
-type SelectionAnchor =
-  | { kind: "element"; element: HTMLElement }
-  | { kind: "range"; range: Range };
 
 interface SearchArrival {
   book: number;
@@ -196,12 +192,14 @@ export default function Home() {
   const [activeColorId, setActiveColorId] = useState("");
   const [bookmarkCatalog, setBookmarkCatalog] = useState<BookmarkAll | null>(null);
   const [bookmarkSetup, setBookmarkSetup] = useState<"fresh" | "legacy" | "current">("fresh");
-  const [migrationDismissed, setMigrationDismissed] = useState(false);
   const [bookmarkLoading, setBookmarkLoading] = useState(false);
   const [bookmarkBusy, setBookmarkBusy] = useState<string | null>(null);
   const [bookmarkError, setBookmarkError] = useState("");
   const [bookmarkRevision, setBookmarkRevision] = useState(0);
-  const [textSelection, setTextSelection] = useState<TextSelection | null>(null);
+  const [bookmarkTarget, setBookmarkTarget] = useState<BookmarkTarget | null>(null);
+  const [recentColorIds, setRecentColorIds] = useState<string[]>([]);
+  const [bookmarkOrigin, setBookmarkOrigin] = useState<BookmarkTarget | null>(null);
+  const [manageTopicsOpen, setManageTopicsOpen] = useState(false);
   const [wholeVerseSelection, setWholeVerseSelection] = useState<WholeVerseSelection | null>(null);
   const [selectedColorId, setSelectedColorId] = useState<string | null>(null);
   const [readerFont, setReaderFont] = useState("serif");
@@ -260,15 +258,14 @@ export default function Home() {
   const wheelGestureActive = useRef(false);
   const wheelGestureTimer = useRef(0);
   const selectionToolbar = useRef<HTMLDivElement | null>(null);
-  const selectionAnchor = useRef<SelectionAnchor | null>(null);
+  const wordSelectionActive = useRef(false);
+  const selectionAnchor = useRef<HTMLElement | null>(null);
   const [toolbarPosition, setToolbarPosition] = useState<FloatingToolbarPosition | null>(null);
   const locale = uiLocale(translation?.lang);
   const t = useMemo(() => createUiTranslator(locale, uiMessages.locale === locale ? uiMessages.messages : []), [locale, uiMessages]);
   const translatorRef = useRef(t);
   const bookmarkState = useRef({ colors, markings, activeColorId, selectedColorId });
   const bookmarkDownloadGeneration = useRef(0);
-  const migrationDialog = useRef<HTMLElement | null>(null);
-  const migrationOpen = bookmarkSetup === "legacy" && Boolean(bookmarkCatalog) && !migrationDismissed;
 
   useEffect(() => { bookmarkState.current = { colors, markings, activeColorId, selectedColorId }; }, [colors, markings, activeColorId, selectedColorId]);
 
@@ -285,7 +282,8 @@ export default function Home() {
   }, [t]);
 
   const closeSelectionToolbar = useCallback(() => {
-    setTextSelection(null);
+    wordSelectionActive.current = false;
+    setBookmarkTarget(null);
     setWholeVerseSelection(null);
     setToolbarPosition(null);
     selectionAnchor.current = null;
@@ -297,9 +295,7 @@ export default function Home() {
     const anchor = selectionAnchor.current;
     if (!toolbar || !anchor) return;
 
-    const rect = anchor.kind === "range"
-      ? anchor.range.getBoundingClientRect()
-      : anchor.element.getBoundingClientRect();
+    const rect = anchor.getBoundingClientRect();
     const measurable = rect.width > 0 || rect.height > 0;
     if (!measurable) return;
     if (rect.bottom < 48 || rect.top > window.innerHeight) {
@@ -324,7 +320,7 @@ export default function Home() {
   }, []);
 
   useLayoutEffect(() => {
-    if (!textSelection && !wholeVerseSelection) return;
+    if (!wholeVerseSelection) return;
     positionSelectionToolbar();
 
     const reposition = () => positionSelectionToolbar();
@@ -334,7 +330,22 @@ export default function Home() {
       window.removeEventListener("resize", reposition);
       window.removeEventListener("scroll", reposition, true);
     };
-  }, [textSelection, wholeVerseSelection, positionSelectionToolbar]);
+  }, [wholeVerseSelection, positionSelectionToolbar]);
+
+  useEffect(() => {
+    if (!wholeVerseSelection) return;
+    const toolbar = selectionToolbar.current;
+    const trigger = selectionAnchor.current;
+    toolbar?.querySelector<HTMLButtonElement>("button")?.focus({ preventScroll: true });
+    const outside = (event: PointerEvent) => {
+      if (event.target instanceof Node && !toolbar?.contains(event.target) && !trigger?.contains(event.target)) closeSelectionToolbar();
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => {
+      document.removeEventListener("pointerdown", outside);
+      if (toolbar?.contains(document.activeElement) || document.activeElement === document.body) trigger?.focus({ preventScroll: true });
+    };
+  }, [wholeVerseSelection, closeSelectionToolbar]);
 
   useEffect(() => {
     const timer = window.setTimeout(() => {
@@ -358,6 +369,8 @@ export default function Home() {
       const hasPreviousBookmarks = localStorage.getItem(MARKING_COLORS) !== null || localStorage.getItem(MARKINGS) !== null;
       setBookmarkSetup(savedBookmarks?.setup ?? (hasPreviousBookmarks ? "legacy" : "fresh"));
       const savedActive = savedBookmarks?.activeColorId ?? localStorage.getItem(ACTIVE_COLOR);
+      const recent = storedValue<unknown>(RECENT_TOPICS, []);
+      setRecentColorIds(Array.isArray(recent) ? recent.filter((id): id is string => typeof id === "string").slice(0, 8) : []);
 
       setRoute(next);
       setAnnotationsEnabled(storedValue<boolean>(SOURCE_ANNOTATIONS, true));
@@ -390,6 +403,8 @@ export default function Home() {
     }, 0);
 
     const popState = () => {
+      closeSelectionToolbar();
+      setBookmarkOrigin(null);
       const friendly = parsePassagePath(window.location.pathname);
       setPathBookSlug(friendly?.bookSlug ?? null);
       setRoute(friendly ? { translation: friendly.translation, book: INITIAL_PASSAGE.book, chapter: friendly.chapter } : parsePassage(window.location.search));
@@ -401,7 +416,7 @@ export default function Home() {
       window.clearTimeout(timer);
       window.removeEventListener("popstate", popState);
     };
-  }, []);
+  }, [closeSelectionToolbar]);
 
   useEffect(() => {
     if (themeMode !== "system") return;
@@ -428,11 +443,11 @@ export default function Home() {
   }, [locale, translation?.direction]);
 
   useEffect(() => {
-    if (!searchOpen && !infoModal && !studyTarget && !referenceTarget && !migrationOpen) return;
+    if (!searchOpen && !infoModal && !studyTarget && !referenceTarget) return;
     const previous = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => { document.body.style.overflow = previous; };
-  }, [infoModal, searchOpen, studyTarget, referenceTarget, migrationOpen]);
+  }, [infoModal, searchOpen, studyTarget, referenceTarget]);
 
   useEffect(() => {
     if (!ready) return;
@@ -450,6 +465,17 @@ export default function Home() {
     catch { window.setTimeout(() => setBookmarkError("Browser storage could not save your bookmarks. Export a backup to keep changes from this session."), 0); }
   }, [activeColorId, colors, markings, markingsReady, bookmarkSetup]);
 
+  useEffect(() => {
+    if (!markingsReady) return;
+    try { localStorage.setItem(RECENT_TOPICS, JSON.stringify(recentColorIds)); } catch { /* Recent topics remain usable during this session. */ }
+  }, [recentColorIds, markingsReady]);
+
+  useEffect(() => {
+    const retry = () => setBookmarkRevision((current) => current + 1);
+    window.addEventListener("online", retry);
+    return () => window.removeEventListener("online", retry);
+  }, []);
+
   const applyBookmarkGroups = useCallback((result: BookmarkGroupMigration) => {
     const current = bookmarkState.current;
     const active = result.colorIdMap[current.activeColorId] ?? (result.colors.some((color) => color.id === current.activeColorId) ? current.activeColorId : result.colors[0]?.id ?? "");
@@ -460,7 +486,7 @@ export default function Home() {
     setActiveColorId(active);
     setSelectedColorId(selected);
     setBookmarkSetup("current");
-    setMigrationDismissed(false);
+    setRecentColorIds((current) => [...new Set(current.map((id) => result.colorIdMap[id] ?? id))]);
     try {
       writeBookmarkState(localStorage, { version: 2, colors: result.colors, markings: result.markings, activeColorId: active, setup: "current" });
     } catch {
@@ -488,45 +514,13 @@ export default function Home() {
   }, [markingsReady, bookmarkRevision, translation?.lang]);
 
   useEffect(() => {
-    if (bookmarkSetup !== "fresh" || !bookmarkCatalog) return;
+    if (!markingsReady || bookmarkSetup === "current" || !bookmarkCatalog) return;
     const timer = window.setTimeout(() => {
       const current = bookmarkState.current;
       applyBookmarkGroups(migrateBookmarkGroups(current.colors, current.markings, bookmarkCatalog, translation?.lang || "en"));
     }, 0);
     return () => window.clearTimeout(timer);
-  }, [applyBookmarkGroups, bookmarkCatalog, bookmarkSetup, translation?.lang]);
-
-  const migrationPreview = useMemo(() => bookmarkSetup === "legacy" && bookmarkCatalog
-    ? bookmarkMigrationPreview(colors, bookmarkCatalog, translation?.lang || "en") : null,
-  [bookmarkSetup, bookmarkCatalog, colors, translation?.lang]);
-  useEffect(() => {
-    if (!migrationOpen) return;
-    const dialog = migrationDialog.current;
-    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const buttons = Array.from(dialog?.querySelectorAll<HTMLButtonElement>("button") ?? []);
-    buttons[0]?.focus();
-    const retainFocus = (event: FocusEvent) => {
-      if (dialog && event.target instanceof Node && !dialog.contains(event.target)) buttons[0]?.focus();
-    };
-    const trap = (event: KeyboardEvent) => {
-      if (event.key === "Escape") { event.preventDefault(); setMigrationDismissed(true); }
-      if (event.key !== "Tab" || !buttons.length) return;
-      const first = buttons[0];
-      const last = buttons[buttons.length - 1];
-      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
-      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
-    };
-    document.addEventListener("focusin", retainFocus);
-    document.addEventListener("keydown", trap);
-    return () => { document.removeEventListener("focusin", retainFocus); document.removeEventListener("keydown", trap); previousFocus?.focus(); };
-  }, [migrationOpen]);
-
-  const migrateBookmarks = () => {
-    if (!bookmarkCatalog) return;
-    const current = bookmarkState.current;
-    applyBookmarkGroups(migrateBookmarkGroups(current.colors, current.markings, bookmarkCatalog, translation?.lang || "en"));
-    setMarkingMessage("Bookmarks migrated. Matching topics are merged and your personal bookmarks are retained.");
-  };
+  }, [applyBookmarkGroups, bookmarkCatalog, bookmarkSetup, markingsReady, translation?.lang]);
 
   const downloadGlobalBookmarks = async (topicId?: string) => {
     const generation = ++bookmarkDownloadGeneration.current;
@@ -559,6 +553,8 @@ export default function Home() {
   };
 
   const go = useCallback((next: Passage, replace = false, requestedBookName?: string | null) => {
+    closeSelectionToolbar();
+    setBookmarkOrigin(null);
     const selectedBookName = requestedBookName === null ? null : requestedBookName ?? booksRef.current.find((book) => book.nr === next.book)?.name;
     const url = selectedBookName ? passagePath(next, selectedBookName) : `/${passageSearch(next)}`;
     window.history[replace ? "replaceState" : "pushState"](
@@ -572,7 +568,7 @@ export default function Home() {
     setMarkdownMessage("");
     setDailyHighlight((current) => current && current.translation === next.translation && current.book === next.book && current.chapter === next.chapter ? current : null);
     setRoute((current) => current.translation === next.translation && current.book === next.book && current.chapter === next.chapter ? current : next);
-  }, []);
+  }, [closeSelectionToolbar]);
 
   const openDailyVerse = useCallback(async () => {
     try {
@@ -605,7 +601,7 @@ export default function Home() {
     const loadingTimer = window.setTimeout(() => {
       setLoading(true);
       setError("");
-      setTextSelection(null);
+      closeSelectionToolbar();
     }, 0);
 
     void (async () => {
@@ -681,7 +677,7 @@ export default function Home() {
     })();
 
     return () => { window.clearTimeout(loadingTimer); if (requestId.current === activeRequest) requestId.current += 1; };
-  }, [go, pathBookSlug, ready, route]);
+  }, [closeSelectionToolbar, go, pathBookSlug, ready, route]);
 
   const dictionaryTranslation = passage?.abbreviation;
   const dictionaryLanguage = passage?.lang ?? "en";
@@ -762,7 +758,7 @@ export default function Home() {
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
-      if (migrationOpen) return;
+
       if (event.key === "Escape") {
         setDrawer(null);
         setSearchOpen(false);
@@ -778,14 +774,14 @@ export default function Home() {
     };
     window.addEventListener("keydown", keydown);
     return () => window.removeEventListener("keydown", keydown);
-  }, [closeSelectionToolbar, turn, studyTarget, referenceTarget, searchOpen, infoModal, migrationOpen]);
+  }, [closeSelectionToolbar, turn, studyTarget, referenceTarget, searchOpen, infoModal, bookmarkTarget]);
 
   useEffect(() => {
     boundaryLock.current = false;
     boundaryAttempt.current = null;
     wheelGestureActive.current = false;
     window.clearTimeout(wheelGestureTimer.current);
-    if (drawer || searchOpen || infoModal || studyTarget || referenceTarget || migrationOpen || markdownMode || loading || !passage) return;
+    if (drawer || searchOpen || infoModal || studyTarget || referenceTarget || bookmarkTarget || markdownMode || loading || !passage) return;
 
     const wheel = (event: WheelEvent) => {
       if (!event.deltaY) return;
@@ -812,7 +808,7 @@ export default function Home() {
       window.clearTimeout(wheelGestureTimer.current);
       window.removeEventListener("wheel", wheel);
     };
-  }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, studyTarget, referenceTarget, turn, migrationOpen]);
+  }, [drawer, infoModal, loading, markdownMode, passage, route, searchOpen, studyTarget, referenceTarget, turn, bookmarkTarget]);
 
   const searchOptions = useMemo(() => ({
     words: searchWords, match: searchMatch, caseSensitive: searchCaseSensitive,
@@ -896,6 +892,7 @@ export default function Home() {
     closeSelectionToolbar(); setReferenceTarget(reference);
   };
   const openStudy = (target: {verse?:number;word?:string;strong?:string[]} = {}) => {
+    if (target.word !== undefined && wordSelectionActive.current) return;
     closeSelectionToolbar(); setSearchOpen(false); setDrawer(null); setStudyTarget(target);
   };
   const openStudySearch = (text: string) => {
@@ -926,15 +923,6 @@ export default function Home() {
     () => new Map(colors.map((color) => [color.id, color])),
     [colors],
   );
-  const selectedTextIsMarked = textSelection
-    ? textSelectionHasMarking(
-        markings,
-        route,
-        textSelection.verse,
-        textSelection.start,
-        textSelection.end,
-      )
-    : false;
   const sortedNotes = useMemo(() => [...notes].sort(compareNotes), [notes]);
 
   const chapterIndex = chapters.findIndex((item) => item.chapter === route.chapter);
@@ -966,74 +954,81 @@ export default function Home() {
     localStorage.setItem(TEXT_SIZE, String(next));
   };
 
-  const addMarking = (
-    verse: number,
-    quote: string,
-    reference: string,
-    start: number | null,
-    end: number | null,
-    colorId = activeColorId,
-  ) => {
-    setMarkings((current) => [
-      ...current,
-      {
-        id: identifier(),
-        passage: route,
-        verse,
-        start,
-        end,
-        quote,
-        reference,
-        colorId,
-        createdAt: Date.now(),
-      },
-    ]);
-    setActiveColorId(colorId);
+  const chooseVerseActions = (verse: number, text: string, reference: string, element: HTMLElement) => {
     closeSelectionToolbar();
-  };
-
-  const chooseVerseMarking = (verse: number, text: string, reference: string, element: HTMLElement) => {
-    setTextSelection(null);
-    setToolbarPosition(null);
-    selectionAnchor.current = { kind: "element", element };
+    selectionAnchor.current = element;
     setWholeVerseSelection({ verse, text, reference });
   };
 
-  const applyWholeVerseMarking = (selection: WholeVerseSelection, colorId: string) => {
-    setMarkings((current) => {
-      return [
-        ...withoutWholeVerseMarking(current, route, selection.verse),
-        { id: identifier(), passage: route, verse: selection.verse, start: null, end: null, quote: selection.text, reference: selection.reference, colorId, createdAt: Date.now() },
-      ];
-    });
-    setActiveColorId(colorId);
+  const openVerseBookmarks = (verse: number, text: string, reference: string, anchor: HTMLElement) => {
     closeSelectionToolbar();
+    setBookmarkTarget({ passage: route, verse, text, reference, start: null, end: null, anchor });
   };
 
-  const applySelectionColor = (colorId: string) => {
-    if (textSelection) {
-      addMarking(textSelection.verse, textSelection.text, textSelection.reference, textSelection.start, textSelection.end, colorId);
-    } else if (wholeVerseSelection) {
-      applyWholeVerseMarking(wholeVerseSelection, colorId);
-    }
-  };
-
-  const captureSelection = (
-    verse: number,
-    reference: string,
-    event: ReactPointerEvent<HTMLSpanElement>,
-  ) => {
+  const captureSelection = (verse: number, reference: string, event: ReactPointerEvent<HTMLSpanElement>) => {
     const selected = selectionWithin(event.currentTarget);
-    if (!selected) {
-      setTextSelection(null);
-      return;
-    }
-
-    const { range, ...selection } = selected;
+    if (!selected) return;
+    const { start, end, text } = selected;
+    wordSelectionActive.current = true;
     setWholeVerseSelection(null);
     setToolbarPosition(null);
-    selectionAnchor.current = { kind: "range", range };
-    setTextSelection({ verse, reference, ...selection });
+    selectionAnchor.current = null;
+    // Text nodes are replaced when highlights change; anchor to the stable
+    // verse element while retaining the exact offsets as the bookmark target.
+    setBookmarkTarget({ passage: route, verse, reference, start, end, text, anchor: event.currentTarget });
+  };
+
+  const bookmarkMenuAssignments = useMemo(() => {
+    if (!bookmarkTarget) return [];
+    const target = bookmarkTarget;
+    const matching = markings.filter((marking) => marking.verse === target.verse && markingMatchesPassage(marking, target.passage));
+    const ranges = new Map<string, { start: number | null; end: number | null }>();
+    ranges.set(JSON.stringify([target.start, target.end]), target);
+    // The verse menu also makes selected-word bookmarks discoverable.
+    if (target.start === null) for (const marking of matching) {
+      ranges.set(JSON.stringify([marking.start, marking.end]), marking);
+    }
+    return [...ranges.values()].flatMap(({ start, end }) =>
+      bookmarkAssignments(matching, target.passage, target.verse, start, end).map((assignment) => ({
+        id: JSON.stringify([start, end, assignment.colorId]),
+        colorId: assignment.colorId,
+        start, end,
+        quote: start === null ? undefined : (assignment.personal[0] ?? assignment.global[0])?.quote,
+        hasGlobal: assignment.global.length > 0,
+        hasPersonal: assignment.personal.length > 0,
+      })),
+    );
+  }, [bookmarkTarget, markings]);
+
+  const addBookmarkTopic = (colorId: string) => {
+    if (!bookmarkTarget || !colorMap.has(colorId)) return;
+    const { passage: targetPassage, verse, start, end, text, reference } = bookmarkTarget;
+    setMarkings((current) => addBookmarkMembership(current, {
+      id: identifier(), passage: targetPassage, verse, start, end, quote: text, reference, colorId, createdAt: Date.now(),
+    }));
+    setActiveColorId(colorId);
+    setRecentColorIds((current) => [colorId, ...current.filter((id) => id !== colorId)].slice(0, 8));
+  };
+
+  const removeBookmarkTopic = (id: string, origin: "personal" | "global") => {
+    const assignment = bookmarkMenuAssignments.find((item) => item.id === id);
+    if (!bookmarkTarget || !assignment) return;
+    setMarkings((current) => removeBookmarkMembership(current, bookmarkTarget.passage, bookmarkTarget.verse,
+      assignment.colorId, assignment.start, assignment.end, origin));
+  };
+
+  const openBookmarkTopic = (colorId?: string) => {
+    if (bookmarkTarget) setBookmarkOrigin(bookmarkTarget);
+    closeSelectionToolbar();
+    setSelectedColorId(colorId ?? null);
+    setColorSearch("");
+    setStudyTab("markings");
+    setDrawer("markings");
+    setManageTopicsOpen(!colorId);
+    window.requestAnimationFrame(() => {
+      const selector = colorId ? ".markings-panel .back-to-groups" : ".markings-panel .add-color";
+      document.querySelector<HTMLElement>(selector)?.focus();
+    });
   };
 
   const updateColor = (id: string, changes: Partial<MarkingColor>) => {
@@ -1091,7 +1086,7 @@ export default function Home() {
       const nextColors = mergeColors(current.colors, backup.colors);
       const nextMarkings = mergeMarkings(current.markings, backup.markings).filter((marking) => nextColors.some((color) => color.id === marking.colorId));
       if (bookmarkCatalog) applyBookmarkGroups(migrateBookmarkGroups(nextColors, nextMarkings, bookmarkCatalog, translation?.lang || "en"));
-      else { setColors(nextColors); setMarkings(nextMarkings); setBookmarkSetup("legacy"); setMigrationDismissed(false); }
+      else { setColors(nextColors); setMarkings(nextMarkings); setBookmarkSetup("legacy"); }
       const previousNotes = notes.length;
       const nextNotes = mergeNotes(notes, backup.notes ?? []);
       setNotes((current) => mergeNotes(current, backup.notes ?? []));
@@ -1159,7 +1154,9 @@ export default function Home() {
     setActiveColorId(defaults[0]?.id ?? "");
     setSelectedColorId(null);
     setBookmarkSetup(bookmarkCatalog ? "current" : "fresh");
-    setMigrationDismissed(false);
+    setRecentColorIds([]);
+    setBookmarkOrigin(null);
+    closeSelectionToolbar();
 
     setDailyHighlight(null);
     setOfflineAvailable(false);
@@ -1283,14 +1280,6 @@ export default function Home() {
         </button> : null}
       </header>
 
-      {migrationOpen && migrationPreview ? <div className="bookmark-migration-backdrop">
-        <section ref={migrationDialog} className="bookmark-migration" role="dialog" aria-modal="true" aria-labelledby="bookmark-migration-title">
-          <h2 id="bookmark-migration-title">Your bookmarks now share global topics</h2>
-          <p>The topic list now comes from the getBible API. Migrate your saved bookmarks to combine matching topics and keep your custom topics, colors, and personal bookmarks.</p>
-          <p>{migrationPreview.matchingGroups} existing topics match global topics. {migrationPreview.retainedGroups} custom topics will be kept. {migrationPreview.addedGroups} global topics will be added.</p>
-          <div className="bookmark-actions"><button type="button" onClick={migrateBookmarks}>Migrate bookmarks</button><button type="button" onClick={() => setMigrationDismissed(true)}>Later</button></div>
-        </section>
-      </div> : null}
       {studyTarget ? <StudyPanel translation={route.translation} language={translation?.lang || "en"} book={route.book} chapter={route.chapter} {...studyTarget} onClose={() => setStudyTarget(null)} onReference={openReference} onSearch={openStudySearch} /> : null}
       {referenceTarget ? <ReferenceModal translation={route.translation} reference={referenceTarget} onClose={() => setReferenceTarget(null)} onOpen={openStudyPassage} /> : null}
 
@@ -1562,6 +1551,15 @@ export default function Home() {
 
         {drawer === "markings" ? (
           <div className="drawer-content markings-panel">
+            {bookmarkOrigin ? <button className="back-to-groups" type="button" onClick={() => {
+              const origin = bookmarkOrigin;
+              setDrawer(null);
+              if (!origin.anchor.isConnected || origin.passage.translation !== route.translation || origin.passage.book !== route.book || origin.passage.chapter !== route.chapter) return;
+              document.getElementById(`v${origin.verse}`)?.scrollIntoView({ block: "center" });
+              document.getElementById(`v${origin.verse}`)?.querySelector<HTMLElement>(".verse-bookmark-trigger")?.focus({ preventScroll: true });
+              wordSelectionActive.current = origin.start !== null;
+              setBookmarkTarget(origin);
+            }}>‹ {t("returnToVerse", { reference: bookmarkOrigin.reference })}</button> : null}
             <p className="drawer-help">
               {t("studyHelp")}
             </p>
@@ -1583,7 +1581,6 @@ export default function Home() {
               </div>
               {bookmarkLoading ? <p role="status">Loading global topics…</p> : null}
               {bookmarkError ? <p role="alert">{bookmarkError} <button type="button" disabled={Boolean(bookmarkBusy)} onClick={() => setBookmarkRevision((current) => current + 1)}>Try again</button></p> : null}
-              {bookmarkSetup === "legacy" && migrationDismissed ? <button type="button" disabled={!bookmarkCatalog} onClick={migrateBookmarks}>Migrate existing bookmarks</button> : null}
             </section>
             <h2>{t(selectedColorId ? "savedMarkings" : "markingGroups")}</h2>
             {!selectedColorId && colors.length ? <>
@@ -1656,7 +1653,7 @@ export default function Home() {
               <p className="empty-markings">{t("noMarkingsYet")}</p>
             )}
 
-            <details className="color-section">
+            <details className="color-section" open={manageTopicsOpen} onToggle={(event) => setManageTopicsOpen(event.currentTarget.open)}>
               <summary>{t("manageGroups")}</summary>
               <div className="color-manager scalable">
                 {visibleColors.map((color) => (
@@ -1753,7 +1750,7 @@ export default function Home() {
             style={{ "--text-size": `${textSize}px` } as CSSProperties}
             data-reader-font={readerFont}
             onTouchStart={(event) => {
-              if (migrationOpen) return;
+
               const touch = event.changedTouches[0];
               if (!touch) return;
               const root = document.documentElement;
@@ -1764,7 +1761,7 @@ export default function Home() {
               };
             }}
             onTouchEnd={(event) => {
-              if (migrationOpen) return;
+
               const start = touchStart.current;
               const touch = event.changedTouches[0];
               touchStart.current = null;
@@ -1813,6 +1810,7 @@ export default function Home() {
                   (marking) => marking.verse === verse.verse,
                 );
                 const wholeMarking = wholeVerseMarking(verseMarkings);
+                const topicColors = [...new Set(verseMarkings.map((marking) => marking.colorId))].flatMap((id) => colorMap.get(id) ?? []);
                 const wholeColor = wholeMarking
                   ? colorMap.get(wholeMarking.colorId)
                   : null;
@@ -1838,13 +1836,15 @@ export default function Home() {
                     <button
                       className="verse-number"
                       type="button"
-                      aria-label={t("chooseMarkingFor", { reference })}
-                      title={t("chooseColorForVerse")}
-                      onClick={(event) => chooseVerseMarking(
+                      aria-label={t("verseActions", { reference })}
+                      aria-haspopup="dialog"
+                      aria-expanded={wholeVerseSelection?.verse === verse.verse}
+                      title={t("verseActions", { reference })}
+                      onClick={(event) => chooseVerseActions(
                         verse.verse,
                         verse.text,
                         reference,
-                        event.currentTarget.closest("li") ?? event.currentTarget,
+                        event.currentTarget,
                       )}
                     >
                       {verse.verse}
@@ -1858,6 +1858,16 @@ export default function Home() {
                       <ScriptureText verse={verse} markings={verseMarkings} colors={colorMap} search={arrival || undefined} enabled={annotationsEnabled}
                         onWord={(word, _start, _end, strong) => openStudy({ verse: verse.verse, word, strong })} onReference={openReference} />
                     </span>
+                    <button className="verse-bookmark-trigger" type="button"
+                      aria-label={t("verseBookmarks", { reference })} title={t("verseBookmarks", { reference })}
+                      aria-haspopup="dialog" aria-expanded={bookmarkTarget?.verse === verse.verse}
+                      onClick={(event) => openVerseBookmarks(verse.verse, verse.text, reference, event.currentTarget)}>
+                      {topicColors.length ? <span className="verse-bookmark-colors" aria-hidden="true">
+                        {topicColors.slice(0, 3).map((color) => <i key={color.id} style={{ backgroundColor: color.value }} />)}
+                        {topicColors.length > 3 ? <small>+{topicColors.length - 3}</small> : null}
+                      </span> : <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 4h10v16l-5-3-5 3V4Z" /></svg>}
+                      <span aria-hidden="true">···</span>
+                    </button>
                     {annotationsEnabled ? <VerseAnnotations verse={verse} onReference={openReference} /> : null}
                     {noteEditor && noteKey(noteEditor) === noteKey({ passage: route, verse: verse.verse }) ? <div className="inline-note-editor" role="dialog" aria-label={t("noteFor", { reference })}>
                       <div className="inline-note-editor-header">
@@ -1906,71 +1916,32 @@ export default function Home() {
         <span className="maintenance-credit">{t("lovinglyMaintainedBy")} <a href="https://wiki.crosswire.org/Frontends:getBible" target="_blank" rel="noreferrer">Vast Development Method</a> <button className="site-footer-heart" type="button" aria-label={t("howLovinglyMaintained", { getBible: "getBible" })} aria-haspopup="dialog" onClick={() => setInfoModal("sync")}>♥</button></span>
       </footer> : null}
 
-      {textSelection || wholeVerseSelection ? (
-        <div
-          className="selection-toolbar"
-          data-placement={toolbarPosition?.placement ?? "above"}
-          data-positioned={toolbarPosition ? "true" : "false"}
-          ref={selectionToolbar}
-          role="dialog"
-          aria-label={t("markSelectedText")}
-          style={{
-            "--selection-toolbar-left": `${toolbarPosition?.left ?? 0}px`,
-            "--selection-toolbar-top": `${toolbarPosition?.top ?? 0}px`,
-            "--selection-toolbar-arrow": `${toolbarPosition?.arrowLeft ?? 24}px`,
-          } as CSSProperties}
-        >
-          <span className="selection-context">
-            <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 15 9-9 4 4-9 9H5v-4Z"/><path d="m12 8 4 4M4 21h16"/></svg>
-            <span>{textSelection ? t("markQuote", { quote: `${textSelection.text.slice(0, 32)}${textSelection.text.length > 32 ? "…" : ""}` }) : t("markReference", { reference: wholeVerseSelection?.reference ?? "" })}</span>
-          </span>
+      {wholeVerseSelection ? (
+        <div className="selection-toolbar" data-placement={toolbarPosition?.placement ?? "above"}
+          data-positioned={toolbarPosition ? "true" : "false"} ref={selectionToolbar}
+          role="dialog" aria-label={t("verseActions", { reference: wholeVerseSelection.reference })}
+          style={{ "--selection-toolbar-left": `${toolbarPosition?.left ?? 0}px`, "--selection-toolbar-top": `${toolbarPosition?.top ?? 0}px`, "--selection-toolbar-arrow": `${toolbarPosition?.arrowLeft ?? 24}px` } as CSSProperties}>
+          <span className="selection-context">{wholeVerseSelection.reference}</span>
           <div className="selection-actions">
-            <button className="selection-study-action" type="button" onClick={() => { const text = textSelection?.text || wholeVerseSelection?.text || ""; closeSelectionToolbar(); restartSearch(text); }}>Search</button>
-            <button className="selection-study-action" type="button" onClick={() => openStudy({ verse: textSelection?.verse ?? wholeVerseSelection?.verse, word: textSelection?.text })}>Study</button>
-            <button className="selection-study-action" type="button" onClick={() => openReference(textSelection?.reference || wholeVerseSelection?.reference || "")}>Reference</button>
-            {colorMap.get(activeColorId) ? <button className="selection-active-group" type="button" onClick={() => applySelectionColor(activeColorId)}>
-              <i style={{ backgroundColor: colorMap.get(activeColorId)?.value }} />
-              <span>{colorMap.get(activeColorId)?.name}</span>
-            </button> : null}
-            <label className="selection-group-picker" title={t("chooseAnotherGroup")}>
-              <span className="sr-only">{t("chooseAnotherGroup")}</span>
-              <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="6" cy="6" r="2"/><circle cx="12" cy="6" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="18" cy="12" r="2"/><circle cx="6" cy="18" r="2"/><circle cx="12" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg>
-              <select value="" onChange={(event) => event.target.value && applySelectionColor(event.target.value)}>
-                <option value="" disabled>{t("moreGroups")}</option>
-                {colors.filter((color) => color.id !== activeColorId).map((color) => <option value={color.id} key={color.id}>{color.name}</option>)}
-              </select>
-            </label>
-            {wholeVerseSelection ? <button className="selection-none" type="button" disabled={!personalWholeVerseMarking(currentMarkings.filter((marking) => marking.verse === wholeVerseSelection.verse))} aria-label="Clear personal highlight" title="Clear personal highlight; shared topic memberships stay saved" onClick={() => {
-              setMarkings((current) => withoutWholeVerseMarking(current, route, wholeVerseSelection.verse));
-              closeSelectionToolbar();
-            }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m6.5 17.5 11-11"/></svg><span>{t("none")}</span></button> : null}
-            {textSelection && selectedTextIsMarked ? <button className="selection-none" type="button" aria-label={t("none")} title={t("none")} onClick={() => {
-              setMarkings((current) => withoutTextSelectionMarkings(
-                current,
-                route,
-                textSelection.verse,
-                textSelection.start,
-                textSelection.end,
-              ));
-              closeSelectionToolbar();
-            }}><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="m6.5 17.5 11-11"/></svg><span>{t("none")}</span></button> : null}
-            {wholeVerseSelection ? <button className="add-note-from-palette" type="button" title={t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")} onClick={() => {
+            <button className="selection-study-action" type="button" onClick={() => openStudy({ verse: wholeVerseSelection.verse })}>{t("commentary")}</button>
+            <button className="add-note-from-palette" type="button" onClick={() => {
               const selection = wholeVerseSelection;
               closeSelectionToolbar();
               openNote(selection.verse, selection.reference);
-            }}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 4h14v13H9l-4 3V4Z"/><path d="M9 8h6M9 12h4"/></svg><span>{t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")}</span></button> : null}
-            <button
-              className="cancel-selection"
-              type="button"
-              aria-label={t("cancelMarking")}
-              title={t("cancelMarking")}
-              onClick={closeSelectionToolbar}
-            >
+            }}>{t(notes.some((note) => noteKey(note) === noteKey({ passage: route, verse: wholeVerseSelection.verse })) ? "editNote" : "addNote")}</button>
+            <button className="cancel-selection" type="button" aria-label={t("closeMenu")} onClick={closeSelectionToolbar}>
               <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 7 10 10M17 7 7 17"/></svg>
             </button>
           </div>
         </div>
       ) : null}
+
+      {bookmarkTarget ? <BookmarkMenu reference={bookmarkTarget.reference}
+        quote={bookmarkTarget.start === null ? undefined : bookmarkTarget.text} anchor={bookmarkTarget.anchor}
+        colors={colors} assignments={bookmarkMenuAssignments} recentColorIds={recentColorIds}
+        assignedTopicIds={bookmarkMenuAssignments.filter((item) => item.hasPersonal && item.start === bookmarkTarget.start && item.end === bookmarkTarget.end).map((item) => item.colorId)}
+        onAdd={addBookmarkTopic} onRemove={removeBookmarkTopic} onOpenTopic={openBookmarkTopic}
+        onManageTopics={() => openBookmarkTopic()} onClose={closeSelectionToolbar} t={t} /> : null}
 
       <nav className="mobile-navigation" aria-label={t("chapterNavigation")}>
         <button type="button" disabled={!canGoPrevious} onClick={() => void turn(-1)}>

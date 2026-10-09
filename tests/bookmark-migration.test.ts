@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { isSharedBookmarkMarking, parseMarkingsBackup, withoutWholeVerseMarking, type Marking, type MarkingColor } from "../lib/markings.ts";
-import { bookmarkDefaultColors, bookmarkDisplayRows, bookmarkMigrationPreview, importBookmarkCatalog, importBookmarkTopic, importBookmarkTopicIntoGroups, migrateBookmarkGroups, normalizeBookmarkTopicName, removeGlobalBookmarkMarkings, type ImportableBookmarkCatalog } from "../lib/shared-bookmarks.ts";
+import { bookmarkDefaultColors, bookmarkDisplayRows, importBookmarkCatalog, importBookmarkTopic, importBookmarkTopicIntoGroups, migrateBookmarkGroups, normalizeBookmarkTopicName, removeGlobalBookmarkMarkings, type ImportableBookmarkCatalog } from "../lib/shared-bookmarks.ts";
 
 const catalog: ImportableBookmarkCatalog = {
   topics: [
@@ -31,7 +31,7 @@ test("new users receive localized global topics as empty groups with stable topi
   assert.equal(filled.markings.every(isSharedBookmarkMarking), true);
 });
 
-test("migration previews are pure and use canonical names, aliases and every catalog locale", () => {
+test("migration is pure and uses canonical names, aliases and every catalog locale", () => {
   const colors: MarkingColor[] = [
     { id: "my-prayer-id", name: "PRAYER", value: "#ffaa00" },
     { id: "my-grace", name: "gracé", value: "#aabbcc" },
@@ -39,15 +39,37 @@ test("migration previews are pure and use canonical names, aliases and every cat
     { id: "unmatched", name: "My family", value: "#123456" },
   ];
   const snapshot = JSON.stringify(colors);
-  const preview = bookmarkMigrationPreview(colors, catalog, "af");
-  assert.equal(preview.matchingGroups, 3);
-  assert.equal(preview.retainedGroups, 1);
-  assert.equal(preview.addedGroups, 0);
-  assert.equal(preview.mergedGroups, 0);
+  const migration = migrateBookmarkGroups(colors, [], catalog, "af");
+  assert.deepEqual(migration.colors.map((color) => [color.id, color.source?.topicId]), [
+    ["my-prayer-id", "prayer"], ["my-grace", "grace"], ["old-gods-judgment", "gods-judgment"], ["unmatched", undefined],
+  ]);
+  assert.deepEqual(migration.colors.map((color) => [color.name, color.value]), colors.map((color) => [color.name, color.value]));
+  assert.equal(migration.colors[3], colors[3]);
   assert.equal(JSON.stringify(colors), snapshot);
   assert.equal(normalizeBookmarkTopicName(" God's — Judgment "), normalizeBookmarkTopicName("godsjudgment"));
-  assert.equal(bookmarkMigrationPreview([{ id: "fr", name: "Grâce", value: "#abcdef" }], catalog, "en").matchingGroups, 1);
-  assert.equal(bookmarkMigrationPreview([{ id: "af", name: "Genade", value: "#abcdef" }], catalog, "en").matchingGroups, 1);
+  for (const [id, name] of [["fr", "Grâce"], ["af", "Genade"]]) {
+    const localized = migrateBookmarkGroups([{ id, name, value: "#abcdef" }], [], catalog, "en");
+    assert.equal(localized.colors.find((color) => color.source?.topicId === "grace")?.id, id);
+    assert.equal(localized.colors.length, catalog.topics.length);
+  }
+});
+
+test("automatic reconciliation of empty and legacy default groups is idempotent and does not download verses", () => {
+  const legacyDefaults: MarkingColor[] = [
+    { id: "prayer-default", name: "Prayer", value: "#ffaa00" },
+    { id: "custom-default", name: "My study", value: "#abcdef" },
+  ];
+  for (const colors of [[], legacyDefaults]) {
+    const migration = migrateBookmarkGroups(colors, [], catalog, "en");
+    assert.deepEqual(migration.markings, []);
+    assert.equal(migration.colors.filter((color) => color.source).length, catalog.topics.length);
+    for (const color of colors) {
+      assert.equal(migration.colors.find((next) => next.id === color.id)?.name, color.name);
+    }
+    const repeated = migrateBookmarkGroups(migration.colors, migration.markings, catalog, "af");
+    assert.deepEqual(repeated.colors, migration.colors);
+    assert.deepEqual(repeated.markings, []);
+  }
 });
 
 test("migration merges earlier imports into matching personal topics while retaining custom data", () => {
@@ -111,13 +133,18 @@ test("multiple matching local groups keep every personal marking and collapse re
   const shared = { ...imported.markings[0], colorId: "my-prayer-id" };
   const globalDuplicate = { ...shared, id: "duplicate-shared", colorId: "second" };
   const otherPersonal = { ...personal, id: "other-personal", colorId: "second", quote: "Another quote" };
-  const preview = bookmarkMigrationPreview(localColors, catalog, "en");
-  assert.equal(preview.mergedGroups, 1);
-  const migration = migrateBookmarkGroups(localColors, [personal, otherPersonal, shared, globalDuplicate], catalog, "en");
+  const word = { ...personal, id: "word", start: 0, end: 3, quote: "For" };
+  const overlappingWord = { ...word, id: "other-word", colorId: "second", end: 7, quote: "For God" };
+  const personalRecords = [personal, otherPersonal, word, overlappingWord];
+  const migration = migrateBookmarkGroups(localColors, [...personalRecords, shared, globalDuplicate], catalog, "en");
   assert.equal(migration.colorIdMap.second, "my-prayer-id");
-  assert.equal(migration.markings.length, 3);
-  assert.deepEqual(migration.markings.filter((marking) => !isSharedBookmarkMarking(marking)).map((marking) => [marking.id, marking.quote]), [[personal.id, personal.quote], [otherPersonal.id, otherPersonal.quote]]);
+  assert.equal(migration.colors.length, catalog.topics.length);
+  assert.equal(migration.markings.length, personalRecords.length + 1);
+  assert.deepEqual(migration.markings.filter((marking) => !isSharedBookmarkMarking(marking)), personalRecords.map((marking) => ({ ...marking, colorId: "my-prayer-id" })));
   assert.equal(migration.markings.filter(isSharedBookmarkMarking).length, 1);
+  const repeated = migrateBookmarkGroups(migration.colors, migration.markings, catalog, "af");
+  assert.deepEqual(repeated.colors, migration.colors);
+  assert.deepEqual(repeated.markings, migration.markings);
 });
 
 test("ambiguous aliases and unavailable source IDs never absorb an unrelated local group", () => {
@@ -126,10 +153,11 @@ test("ambiguous aliases and unavailable source IDs never absorb an unrelated loc
     { id: "ambiguous", name: "Common", value: "#abcdef" },
     { id: "unknown", name: "Grace", value: "#123456", source: { type: "shared-bookmark", topicId: "removed-topic" } },
   ];
-  const preview = bookmarkMigrationPreview(colors, ambiguous, "en");
-  assert.equal(preview.retainedGroups, 2);
-  assert.equal(preview.matchingGroups, 0);
-  assert.equal(migrateBookmarkGroups(colors, [], ambiguous, "en").colors.length, 5);
+  const migration = migrateBookmarkGroups(colors, [], ambiguous, "en");
+  assert.deepEqual(migration.colors.slice(0, 2), colors);
+  assert.equal(migration.colors.length, 5);
+  assert.equal(migration.colorIdMap.ambiguous, "ambiguous");
+  assert.equal(migration.colorIdMap.unknown, "unknown");
 });
 
 test("catalog validation prevents partial imports and backup metadata survives non-global group IDs", () => {

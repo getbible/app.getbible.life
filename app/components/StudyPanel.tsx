@@ -10,6 +10,7 @@ import {
   type DictionarySummary, type ScriptureReference, type StudyMetadata,
 } from "@/lib/study-api";
 import { lookupDictionaries, type DictionaryLookupResult } from "@/lib/dictionary-lookup";
+import { defaultCommentary } from "@/lib/commentary-preference";
 import { useDialog } from "./useDialog";
 import "./study.css";
 
@@ -102,10 +103,11 @@ function StudyContent({ translation, language, book, chapter, verse, word, stron
     }
     if (tab === "commentary" && !commentaries) {
       getCommentaryCatalog(controller.signal).then((catalog) => {
+        if (controller.signal.aborted) return;
         const resources = resourceOrder(catalog.commentaries.filter((item) => item.entry_count > 0), language);
         const previous = remembered("commentary", language);
         setCommentaries(resources);
-        setCommentary(resources.find((item) => item.id === previous)?.id ?? resources.find((item) => item.language === language && item.id === "mhcc")?.id ?? resources.find((item) => item.language === language)?.id ?? resources.find((item) => item.id === "mhcc")?.id ?? resources[0]?.id ?? "");
+        setCommentary(defaultCommentary(resources, language, previous));
         setCatalogErrors((current) => ({ ...current, commentary: "" }));
       }).catch((error) => { if (!cancelled(error)) setCatalogErrors((current) => ({ ...current, commentary: message(error) })); });
     }

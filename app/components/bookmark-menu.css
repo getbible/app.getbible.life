@@ -1,0 +1,35 @@
+.bookmark-menu { position:fixed; z-index:64; visibility:hidden; display:flex; flex-direction:column; width:min(360px,calc(100vw - 20px)); max-height:calc(100dvh - 120px); color:var(--foreground); background:var(--background); border:1px solid var(--border); border-radius:13px; box-shadow:0 14px 48px rgb(0 0 0 / .22); font:13px/1.5 var(--font-geist-sans),Arial,sans-serif; outline:none; }
+.bookmark-menu[data-positioned="true"] { visibility:visible; }
+.bookmark-menu button { color:inherit; font:inherit; cursor:pointer; }
+.bookmark-menu button:focus-visible,.bookmark-menu input:focus-visible { outline:2px solid var(--foreground); outline-offset:-3px; }
+.bookmark-menu-header { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:8px 8px 8px 16px; border-bottom:1px solid var(--border); flex-shrink:0; }
+.bookmark-menu-header h2 { margin:0; font-size:14px; font-weight:600; line-height:1.4; }
+.bookmark-menu-icon { min-width:40px; min-height:40px; padding:0; border:0; border-radius:7px; background:transparent; font-size:23px !important; }
+.bookmark-menu-body { min-height:0; padding:8px; overflow:auto; overscroll-behavior:contain; }
+.bookmark-menu-selection { padding:6px 8px 12px; }
+.bookmark-menu-selection small { color:var(--muted); font-size:11px; }
+.bookmark-menu-selection p { max-height:100px; margin:4px 0 0; overflow:auto; overflow-wrap:anywhere; font-size:13px; }
+.bookmark-menu-assignments { margin:0 0 8px; padding:0; list-style:none; }
+.bookmark-menu-assignments li { display:flex; align-items:center; gap:2px; border-bottom:1px solid var(--border); }
+.bookmark-menu-assignments li:last-child { border:0; }
+.bookmark-menu-assignment { display:flex; align-items:center; gap:10px; flex:1; min-width:0; min-height:48px; padding:9px 8px; border:0; border-radius:6px; background:transparent; text-align:start; }
+.bookmark-menu-name { display:grid; gap:2px; min-width:0; }
+.bookmark-menu-name strong { font-weight:500; overflow-wrap:anywhere; }
+.bookmark-menu-name small { max-height:3em; overflow:hidden; color:var(--muted); font-size:11px; overflow-wrap:anywhere; }
+.bookmark-menu-dot { flex:none; width:11px; height:11px; border:1px solid rgb(0 0 0 / .16); border-radius:50%; }
+.bookmark-menu-remove { display:flex; align-items:center; justify-content:center; gap:4px; flex:none; min-width:40px; min-height:40px; padding:4px 6px; border:0; border-radius:6px; background:transparent; color:var(--muted) !important; font-size:20px !important; }
+.bookmark-menu-global { display:inline-flex; align-items:center; justify-content:center; width:18px; height:18px; border:1px solid var(--border); border-radius:4px; font-size:10px; font-weight:600; }
+.bookmark-menu-add { width:100%; min-height:44px; padding:9px; border:1px solid var(--border); border-radius:7px; background:var(--subtle); text-align:start; font-weight:500 !important; }
+.bookmark-menu-add > span { padding-inline-end:5px; font-size:18px; }
+.bookmark-menu-picker { margin-top:9px; }
+.bookmark-menu-picker input { width:100%; min-height:42px; padding:9px 10px; border:1px solid var(--border); border-radius:6px; color:var(--foreground); background:var(--background); font:inherit; }
+.bookmark-menu-options { max-height:240px; overflow:auto; overscroll-behavior:contain; padding-top:4px; }
+.bookmark-menu-options h3 { margin:9px 8px 3px; color:var(--muted); font-size:10px; font-weight:600; letter-spacing:.04em; }
+.bookmark-menu-topic { display:flex; align-items:center; gap:10px; width:100%; min-height:44px; padding:8px; border:0; border-radius:6px; background:transparent; text-align:start; }
+.bookmark-menu-topic > span:nth-child(2) { overflow-wrap:anywhere; }
+.bookmark-menu-plus { margin-inline-start:auto; padding-inline-start:8px; color:var(--muted); font-size:18px; }
+.bookmark-menu-empty { margin:0; padding:12px 8px; color:var(--muted); font-size:12px; }
+.bookmark-menu footer { padding:7px 8px; border-top:1px solid var(--border); flex-shrink:0; }
+.bookmark-menu footer button { width:100%; min-height:40px; border:0; border-radius:6px; background:transparent; text-align:start; padding:8px; font-size:12px; }
+@media(hover:hover) { .bookmark-menu-assignment:hover,.bookmark-menu-topic:hover,.bookmark-menu-icon:hover,.bookmark-menu-remove:hover,.bookmark-menu footer button:hover { background:var(--subtle); } }
+@media(pointer:coarse) { .bookmark-menu-icon,.bookmark-menu-remove,.bookmark-menu footer button { min-width:44px; min-height:44px; } }

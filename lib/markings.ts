@@ -22,6 +22,15 @@ export interface Marking {
   source?: { type: "shared-bookmark"; topicId: string };
 }
 
+export type BookmarkMembershipOrigin = "personal" | "global" | "all";
+
+export interface BookmarkAssignment {
+  colorId: string;
+  /** Each origin stays independently removable, even when displayed as one topic. */
+  personal: Marking[];
+  global: Marking[];
+}
+
 export interface MarkedSegment {
   start: number;
   end: number;
@@ -112,6 +121,46 @@ export function markingMatchesPassage(
   return marking.start === null && marking.end === null
     ? canonicalPassageKey(marking.passage) === canonicalPassageKey(passage)
     : passageKey(marking.passage) === passageKey(passage);
+}
+
+function bookmarkMatchesTarget(marking: Marking, passage: Passage, verse: number, start: number | null, end: number | null): boolean {
+  if (marking.verse !== verse || marking.start !== start || marking.end !== end) return false;
+  return start === null && end === null
+    ? canonicalPassageKey(marking.passage) === canonicalPassageKey(passage)
+    : passageKey(marking.passage) === passageKey(passage);
+}
+
+/** Group only this exact verse or selection; overlapping word selections stay distinct. */
+export function bookmarkAssignments(markings: Marking[], passage: Passage, verse: number, start: number | null = null, end: number | null = null): BookmarkAssignment[] {
+  const assignments = new Map<string, BookmarkAssignment>();
+  for (const marking of markings) {
+    if (!bookmarkMatchesTarget(marking, passage, verse, start, end)) continue;
+    let assignment = assignments.get(marking.colorId);
+    if (!assignment) {
+      assignment = { colorId: marking.colorId, personal: [], global: [] };
+      assignments.set(marking.colorId, assignment);
+    }
+    assignment[isSharedBookmarkMarking(marking) ? "global" : "personal"].push(marking);
+  }
+  return [...assignments.values()];
+}
+
+/** Add one topic without replacing other topics or an independent global origin. */
+export function addBookmarkMembership(markings: Marking[], marking: Marking): Marking[] {
+  const global = isSharedBookmarkMarking(marking);
+  const existing = markings.some((current) => current.colorId === marking.colorId &&
+    isSharedBookmarkMarking(current) === global &&
+    bookmarkMatchesTarget(current, marking.passage, marking.verse, marking.start, marking.end));
+  return existing ? markings : [...markings, marking];
+}
+
+/** Personal removal is the default; removing global or both origins requires an explicit choice. */
+export function removeBookmarkMembership(markings: Marking[], passage: Passage, verse: number, colorId: string, start: number | null = null, end: number | null = null, origin: BookmarkMembershipOrigin = "personal"): Marking[] {
+  return markings.filter((marking) => {
+    if (marking.colorId !== colorId || !bookmarkMatchesTarget(marking, passage, verse, start, end)) return true;
+    const global = isSharedBookmarkMarking(marking);
+    return origin !== "all" && (origin === "personal" ? global : !global);
+  });
 }
 
 function validSharedBookmarkTopicSource(source: unknown): source is NonNullable<MarkingColor["source"]> {
