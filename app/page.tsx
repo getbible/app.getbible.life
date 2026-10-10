@@ -69,6 +69,7 @@ import { SearchFilters, type SearchFilterValue } from "./components/SearchFilter
 import { DownloadManager } from "./components/DownloadManager";
 import StudyPanel from "./components/StudyPanel";
 import { BookmarkMenu } from "./components/BookmarkMenu";
+import { BookmarkTopicList } from "./components/BookmarkTopicList";
 import { OfflineShell } from "./components/OfflineShell";
 import { InfrastructureCredit } from "./components/InfrastructureCredit";
 import { ReferenceModal } from "./components/ReferenceModal";
@@ -1571,43 +1572,10 @@ export default function Home() {
                 <button type="button" disabled={Boolean(bookmarkBusy) || !sortedColorMarkings.some((row) => row.global)} onClick={() => removeGlobalBookmarks(colorMap.get(selectedColorId)?.source?.topicId)}>Remove this topic’s global bookmarks</button>
               </div> : null}
               {sortedColorMarkings.length ? (
-              <ul className="marking-list">
-                {sortedColorMarkings.map((row) => {
-                  const marking = row.marking;
-                  const color = colorMap.get(marking.colorId);
-                  return (
-                    <li key={marking.id}>
-                      <button
-                        className="marking-link"
-                        type="button"
-                        onClick={() => openMarking(marking)}
-                      >
-                        <span
-                          className="marking-dot"
-                          style={{ backgroundColor: color?.value }}
-                        />
-                        <span>
-                          <strong>{marking.reference ?? t("verseNumber", { verse: marking.verse })} {row.global ? <span className="global-bookmark-badge" title="Global bookmark" aria-label="Global bookmark">G</span> : null}</strong>
-                          <small>{marking.quote}</small>
-                          <em>{color?.name ?? t("marking")}{row.personal && row.global ? " · personal bookmark also saved" : ""}</em>
-                        </span>
-                      </button>
-                      <button
-                        className="delete-marking"
-                        type="button"
-                        aria-label={t("deleteMarkingFor", { reference: marking.reference ?? marking.verse })}
-                        onClick={() =>
-                          setMarkings((current) =>
-                            current.filter((item) => !row.ids.includes(item.id)),
-                          )
-                        }
-                      >
-                        ×
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
+              <BookmarkTopicList rows={sortedColorMarkings} colors={colorMap} translation={route.translation} t={t}
+                onOpen={openMarking}
+                onDelete={(row) => setMarkings((current) => current.filter((item) => !row.ids.includes(item.id)))}
+              />
               ) : <p className="empty-markings">{t("noMarkingsInGroup")}</p>}
             </> : (
               <p className="empty-markings">{t("noMarkingsYet")}</p>

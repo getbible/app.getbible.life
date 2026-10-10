@@ -1,0 +1,12 @@
+.bookmark-preview-list .marking-link { padding-block: 15px; text-align: start; }
+.bookmark-preview-link:hover { background: var(--subtle); }
+.bookmark-preview-link:focus-visible { outline: 2px solid var(--foreground); outline-offset: 2px; border-radius: 4px; }
+.bookmark-preview-reference { display: flex; align-items: center; flex-wrap: wrap; gap: 6px; line-height: 1.5; }
+.bookmark-preview-list .bookmark-preview-reference { font-size: 12px; }
+.bookmark-preview-text { display: block; margin: 7px 0 9px; color: var(--foreground); font-family: Georgia, "Times New Roman", serif; font-size: 14px; line-height: 1.65; white-space: pre-wrap; overflow-wrap: anywhere; text-align: start; }
+.bookmark-preview-status { margin: 7px 0 9px; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.bookmark-preview-caption { margin-top: 4px; color: var(--muted); font-size: 10px; line-height: 1.4; }
+.bookmark-preview-list .delete-marking { align-self: start; margin-top: 9px; }
+.bookmark-preview-notice { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 12px 0; color: var(--muted); font-size: 11px; line-height: 1.5; }
+.bookmark-preview-notice button { padding: 5px 8px; border: 1px solid var(--border); border-radius: 4px; color: var(--foreground); background: var(--background); cursor: pointer; font: inherit; }
+.bookmark-preview-notice button:hover { background: var(--subtle); }

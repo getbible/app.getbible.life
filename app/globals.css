@@ -1065,16 +1065,6 @@ summary:focus-visible {
   font-size: 11px;
 }
 
-.marking-link small {
-  overflow: hidden;
-  margin: 3px 0;
-  color: var(--muted);
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .marking-link em {
   color: var(--muted);
   font-size: 9px;
